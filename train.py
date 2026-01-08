@@ -232,7 +232,7 @@ def main():
     })
 
     # 2. Handle EfficientAD Constraint
-    if args.model == "EfficientAD" and ds_kwargs["train_batch_size"] != 1:
+    if args.model == "efficientad" and ds_kwargs["train_batch_size"] != 1:
         logger.warning("EfficientAD requires train_batch_size=1. Overriding.")
         ds_kwargs["train_batch_size"] = 1
     
