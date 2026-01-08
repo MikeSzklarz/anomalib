@@ -55,8 +55,7 @@ MODEL_MAP: Dict[str, Type] = {
     "stfpm": Stfpm,
     "supersimplenet": Supersimplenet,
     "uflow": Uflow,
-    "uninet": UniNet,
-    "winclip": WinClip
+    "uninet": UniNet
 }
 
 # Models that require iterative training (Gradient Descent)
