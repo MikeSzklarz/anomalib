@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 from anomalib.engine import Engine
 from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
+from anomalib.metrics import Evaluator, AUROC, F1Score
 
 from anomalib.data import (
     MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D, 
@@ -292,6 +293,28 @@ def main():
     logger.info(f"Initializing Model: {args.model}")
     ModelClass = MODEL_MAP[args.model]
     model_kwargs = get_init_args(yaml_config, "model")
+    
+    # If task is classification, explicitly define metrics to exclude pixel-level checks.
+    if args.task == "classification":
+        logger.info("Task is 'classification'. Configuring Evaluator for Unbounded Scores.")
+        
+        val_metrics = [
+            AUROC(fields=["pred_score", "gt_label"])
+        ]
+        
+        test_metrics = [
+            AUROC(fields=["pred_score", "gt_label"]),
+            F1Score(fields=["pred_label", "gt_label"])
+        ]
+        
+        # Create the evaluator with distinct sets
+        evaluator = Evaluator(
+            val_metrics=val_metrics,
+            test_metrics=test_metrics
+        )
+        
+        model_kwargs["evaluator"] = evaluator
+    
     model = ModelClass(**model_kwargs)
 
     # -------------------------------------------------------------------------

@@ -52,6 +52,7 @@ MAX_EPOCHS=999
 NODELIST=""
 CATEGORY=""
 PARTITION="waccamaw"
+TASK="classification"
 
 # 3. PARSE CLI ARGUMENTS
 while [[ $# -gt 0 ]]; do
@@ -60,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --dataset)        DATASET="$2"; shift 2 ;;
     --max_epochs)     MAX_EPOCHS="$2"; shift 2 ;;
     --category)       CATEGORY="$2"; shift 2 ;;
+    --task)           TASK="$2"; shift 2 ;;
     --nodelist)       NODELIST="$2"; shift 2 ;; # Expects comma separated: node1,node2
     --partition)      PARTITION="$2"; shift 2 ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
@@ -79,6 +81,7 @@ echo "========================================"
 echo "Starting Sweep"
 echo "Models: ${#MODELS[@]}"
 echo "Dataset: $DATASET"
+echo "Task: $TASK"
 echo "Root: $ROOT_DIR"
 if [ "$NUM_NODES" -gt 0 ]; then
     echo "Distributing across nodes: ${NODES_ARRAY[*]}"
@@ -113,7 +116,8 @@ for model in "${MODELS[@]}"; do
         --dataset "$DATASET" \
         --root_dir "$ROOT_DIR" \
         --max_epochs "$MAX_EPOCHS" \
-        --category "$CATEGORY"
+        --category "$CATEGORY" \
+        --task "$TASK"
 
     ((count++))
 done
