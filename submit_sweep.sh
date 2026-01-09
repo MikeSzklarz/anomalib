@@ -16,33 +16,33 @@ MODELS=(
     "patchcore"            # Memory bank coreset subsampling
     "dfkde"                # Deep Feature Kernel Density Estimation
 
-    # # --- TIER 2: Efficient Distillation (Short Training) ---
-    # # Student-Teacher networks that converge relatively fast.
-    # "efficientad"          # Designed specifically for efficiency
-    # "stfpm"                # Student-Teacher Feature Pyramid
-    # "fre"                  # Feature Reconstruction Error
-    # "reversedistillation"  # Knowledge distillation
-    # "supersimplenet"       # Feature adaption (often faster than flows)
+    # --- TIER 2: Efficient Distillation (Short Training) ---
+    # Student-Teacher networks that converge relatively fast.
+    "efficientad"          # Designed specifically for efficiency
+    "stfpm"                # Student-Teacher Feature Pyramid
+    "fre"                  # Feature Reconstruction Error
+    "reversedistillation"  # Knowledge distillation
+    "supersimplenet"       # Feature adaption (often faster than flows)
 
-    # # --- TIER 3: Normalizing Flows & Hybrids (Medium Training) ---
-    # # These require optimizing flow steps or coupled hyperspheres.
-    # "fastflow"             # 2D Flow (Faster than CFLOW)
-    # "cfa"                  # Coupled-hypersphere Autoencoder
-    # "csflow"               # Cross-Scale Flow
-    # "uflow"                # Unsupervised Flow
-    # "ganomaly"             # Encoder-Decoder-Encoder GAN
+    # --- TIER 3: Normalizing Flows & Hybrids (Medium Training) ---
+    # These require optimizing flow steps or coupled hyperspheres.
+    "fastflow"             # 2D Flow (Faster than CFLOW)
+    "cfa"                  # Coupled-hypersphere Autoencoder
+    "csflow"               # Cross-Scale Flow
+    "uflow"                # Unsupervised Flow
+    "ganomaly"             # Encoder-Decoder-Encoder GAN
 
-    # # --- TIER 4: Reconstruction & Synthetic Generation (Slow Training) ---
-    # # High epoch counts needed for convergence or synthetic generation.
-    # "draem"                # Needs to generate synthetic anomalies on-the-fly
-    # "cflow"                # Positional encoding flow (often slow convergence)
-    # "dsr"                  # Dual-Subspace Reprojection
+    # --- TIER 4: Reconstruction & Synthetic Generation (Slow Training) ---
+    # High epoch counts needed for convergence or synthetic generation.
+    "draem"                # Needs to generate synthetic anomalies on-the-fly
+    "cflow"                # Positional encoding flow (often slow convergence)
+    "dsr"                  # Dual-Subspace Reprojection
 
-    # # --- TIER 5: Complex / Transformer Backbones (Slowest) ---
-    # # Large backbones or complex attention mechanisms.
-    # "uninet"               # Unified Network
-    # "anomalydino"          # DINO-based (Large backbone)
-    # "dinomaly"             # DINO-based variants
+    # --- TIER 5: Complex / Transformer Backbones (Slowest) ---
+    # Large backbones or complex attention mechanisms.
+    "uninet"               # Unified Network
+    "anomalydino"          # DINO-based (Large backbone)
+    "dinomaly"             # DINO-based variants
 )
 
 # 2. DEFAULT ARGUMENTS
