@@ -108,7 +108,7 @@ for model in "${MODELS[@]}"; do
         --job-name="$JOB_NAME" \
         --partition="$PARTITION" \
         $SLURM_NODE_ARG \
-        run_train.slurm \
+        run_slurm.sh \
         --model "$model" \
         --dataset "$DATASET" \
         --root_dir "$ROOT_DIR" \
