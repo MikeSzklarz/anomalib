@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Type, Set
 
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch import seed_everything
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="timm")
@@ -197,6 +198,7 @@ def main():
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     
     # Export & Saving
     parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"], 
@@ -208,6 +210,9 @@ def main():
                         help="Print filenames of all images in every split to verify distribution.")
 
     args = parser.parse_args()
+    
+    if args.seed is not None:
+        seed_everything(args.seed, workers=True)
     
     # Path Setup
     output_path = Path(args.output_dir) / args.model / args.dataset / args.category
