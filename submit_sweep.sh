@@ -15,6 +15,7 @@ MODELS=(
     "dfm"                  # Deep Feature Modeling (PCA-based)
     "patchcore"            # Memory bank coreset subsampling
     "dfkde"                # Deep Feature Kernel Density Estimation
+    "anomalydino"          
 
     # --- TIER 2: Efficient Distillation (Short Training) ---
     # Student-Teacher networks that converge relatively fast.
@@ -41,7 +42,6 @@ MODELS=(
     # --- TIER 5: Complex / Transformer Backbones (Slowest) ---
     # Large backbones or complex attention mechanisms.
     "uninet"               # Unified Network
-    "anomalydino"          # DINO-based (Large backbone)
     "dinomaly"             # DINO-based variants
 )
 

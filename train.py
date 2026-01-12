@@ -6,7 +6,7 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, Type, Set
 
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import Callback, EarlyStopping
 from lightning.pytorch import seed_everything
 
 # Suppress warnings
@@ -160,6 +160,27 @@ def log_dataset_details(datamodule, logger, print_paths=False):
     
     logger.info("================================")
     
+class FileLoggingCallback(Callback):
+    """
+    Logs metrics to the python logger at the end of every epoch 
+    so they appear in the text log file.
+    """
+    def __init__(self, logger):
+        self.logger = logger
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        # Get all logged metrics (this includes losses logged by Anomalib)
+        metrics = trainer.callback_metrics
+        
+        # Filter for interesting metrics (loss, auroc, etc) and format them
+        log_parts = [f"Epoch {epoch}"]
+        for name, value in metrics.items():
+            if isinstance(value, float) or hasattr(value, 'item'):
+                log_parts.append(f"{name}: {float(value):.4f}")
+        
+        self.logger.info(" | ".join(log_parts))    
+
 # -----------------------------------------------------------------------------
 # 3. Helpers
 # -----------------------------------------------------------------------------
@@ -194,7 +215,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     
     # Training params
-    parser.add_argument("--max_epochs", type=int, default=100)
+    parser.add_argument("--max_epochs", type=int, default=999)
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
@@ -327,10 +348,20 @@ def main():
     # -------------------------------------------------------------------------
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
     
+    callbacks = [
+        EarlyStopping(
+            monitor="AUROC",
+            mode="max",
+            patience=10,
+        ),
+        FileLoggingCallback(logger=logger)
+    ]
+    
     # -------------------------------------------------------------------------
     # Engine
     # -------------------------------------------------------------------------
     engine = Engine(
+        callbacks=callbacks,
         logger=tb_logger,
         max_epochs=args.max_epochs,
         accelerator=args.accelerator,
