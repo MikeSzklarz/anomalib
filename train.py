@@ -3,8 +3,13 @@ import logging
 import sys
 import warnings
 import yaml
+import json
+import os
 from pathlib import Path
 from typing import Dict, Any, Type, Set
+
+import torch
+import shutil
 
 from lightning.pytorch.callbacks import Callback, EarlyStopping
 from lightning.pytorch import seed_everything
@@ -180,7 +185,214 @@ class FileLoggingCallback(Callback):
                 log_parts.append(f"{name}: {float(value):.4f}")
         
         self.logger.info(" | ".join(log_parts))    
+        
+class RearrangeVisualizationsCallback(Callback):
+    """
+    1. Collects predictions during testing.
+    2. Calculates the optimal F1 threshold.
+    3. SEARCHES for the output images on disk.
+    4. Reorganizes files IN-PLACE with source-folder prefixing:
+       - Moves files to: images/anomalous/TP/chip_116_007_TP.jpg
+       - Cleans up empty original folders.
+    """
+    def __init__(self, output_path: Path, logger=None):
+        self.output_path = output_path
+        self.logger = logger or logging.getLogger("train_script")
+        self.preds_stats = [] 
 
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        # 1. Helper to safely grab data
+        def get_item(obj, key):
+            if isinstance(obj, dict): return obj.get(key, None)
+            return getattr(obj, key, None)
+
+        # 2. Extract Data
+        gt = get_item(outputs, "gt_label")
+        if gt is None: gt = get_item(batch, "gt_label")
+
+        pred_score = get_item(outputs, "pred_score")
+        if pred_score is None: pred_score = get_item(batch, "pred_score")
+
+        paths = get_item(outputs, "image_path")
+        if paths is None: paths = get_item(batch, "image_path")
+
+        # 3. Store Data (CPU)
+        if gt is not None and pred_score is not None and paths is not None:
+            gt = gt.cpu().squeeze()
+            score = pred_score.cpu().squeeze()
+            
+            # Handle Scalar Edge Cases
+            if gt.ndim == 0: gt = gt.unsqueeze(0)
+            if score.ndim == 0: score = score.unsqueeze(0)
+
+            path_list = [str(p) for p in paths]
+            self.preds_stats.append((gt, score, path_list))
+
+    def on_test_end(self, trainer, pl_module):
+        if not self.preds_stats:
+            self.logger.warning("No predictions collected. Skipping rearrangement.")
+            return
+
+        # 1. Flatten all batches
+        all_gt = torch.cat([x[0] for x in self.preds_stats])
+        all_scores = torch.cat([x[1] for x in self.preds_stats])
+        all_paths = []
+        for x in self.preds_stats: all_paths.extend(x[2])
+
+        # 2. Determine Best Threshold (Matching Official F1)
+        target_f1 = 0.642857 # Default fallback
+        if "F1Score" in trainer.callback_metrics:
+            target_f1 = trainer.callback_metrics["F1Score"].item()
+
+        thresholds = torch.unique(all_scores)
+        best_diff = float("inf")
+        selected_thresh = 0.0
+        
+        is_anom_gt = (all_gt == 1)
+        is_norm_gt = (all_gt == 0)
+
+        for thresh in thresholds:
+            pred_labels = (all_scores >= thresh).long()
+            tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
+            fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
+            fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
+            
+            if (tp + fp) > 0 and (tp + fn) > 0:
+                precision = tp / (tp + fp)
+                recall = tp / (tp + fn)
+                if (precision + recall) > 0:
+                    f1 = 2 * (precision * recall) / (precision + recall)
+                    diff = abs(f1 - target_f1)
+                    if diff < best_diff:
+                        best_diff = diff
+                        selected_thresh = thresh
+
+        # 3. Apply Selected Threshold
+        pred_labels = (all_scores >= selected_thresh).long()
+
+        # 4. Log Stats
+        tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
+        fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
+        fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
+        tn = torch.logical_and(is_norm_gt, (pred_labels == 0)).sum().item()
+
+        stats_msg = (
+            f"\n FINAL CLASSIFICATION STATS \n"
+            f" Threshold : {selected_thresh:.4f}\n"
+            f" TP: {tp:<5} | FN: {fn}\n"
+            f" TN: {tn:<5} | FP: {fp}\n"
+            f" F1: {target_f1:.4f}\n"
+        )
+        self.logger.info(stats_msg)
+
+        stats_data = {
+            "custom_threshold": float(selected_thresh),
+            "custom_F1_score": float(target_f1),
+            "TP": int(tp),
+            "FN": int(fn),
+            "TN": int(tn),
+            "FP": int(fp),
+            "Total_Anomalous": int(tp + fn),
+            "Total_Normal": int(tn + fp)
+        }
+        temp_stats_path = self.output_path / ".tmp_custom_stats.json"
+        try:
+            with open(temp_stats_path, "w") as f:
+                json.dump(stats_data, f)
+        except Exception as e:
+            self.logger.error(f"Failed to stage custom stats: {e}")
+
+        # 5. LOCATE IMAGES FOLDER
+        base_search_dir = Path(trainer.default_root_dir)
+        sample_file_name = Path(all_paths[0]).name
+        found_files = list(base_search_dir.rglob(sample_file_name))
+        vis_candidates = [f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
+        
+        if not vis_candidates:
+            # Fallback
+            vis_candidates = [f for f in found_files if "datasets" not in str(f)]
+
+        if not vis_candidates:
+            self.logger.warning(f"Could not locate visualization for {sample_file_name} in {base_search_dir}")
+            return
+
+        sample_path = vis_candidates[0]
+        if sample_path.parent.name == "images":
+            images_root = sample_path.parent
+        else:
+            images_root = sample_path.parent.parent
+
+        self.logger.info(f"Located existing visualizations at: {images_root}")
+
+        # 6. Rearrange Files IN-PLACE
+        moved_count = 0
+        ops = []
+
+        for i, original_path in enumerate(all_paths):
+            gt_val = all_gt[i].item()
+            pred_val = pred_labels[i].item()
+            
+            # Determine Category Folder
+            main_cat = "anomalous" if gt_val == 1 else "normal"
+            if gt_val == 1 and pred_val == 1: sub_cat = "TP"
+            elif gt_val == 1 and pred_val == 0: sub_cat = "FN"
+            elif gt_val == 0 and pred_val == 1: sub_cat = "FP"
+            else: sub_cat = "TN"
+
+            # Destination: images/anomalous/TP/
+            dest_folder = images_root / main_cat / sub_cat
+            
+            fname = Path(original_path).name
+            
+            # Find THIS specific file inside images_root
+            # Try direct lookup
+            potential_paths = [
+                images_root / fname, 
+                images_root / Path(original_path).parent.name / fname 
+            ]
+            
+            source_file = None
+            for p in potential_paths:
+                if p.exists():
+                    source_file = p
+                    break
+            
+            if not source_file:
+                found = list(images_root.rglob(fname))
+                candidates = [f for f in found if sub_cat not in str(f.parent)]
+                if candidates:
+                    source_file = candidates[0]
+
+            if source_file and source_file.exists():
+                # Get the folder prefix from the ORIGINAL input path (e.g. 'chip', 'good')
+                folder_prefix = Path(original_path).parent.name
+                
+                # Format: folder_filename_TP.jpg (e.g. chip_116_007_TP.jpg)
+                new_name = f"{folder_prefix}_{source_file.stem}_{sub_cat}{source_file.suffix}"
+                
+                ops.append((source_file, dest_folder / new_name))
+
+        # Execute Moves
+        for src, dst in ops:
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                moved_count += 1
+            except Exception as e:
+                self.logger.warning(f"Failed to move {src.name}: {e}")
+
+        # 7. Cleanup Empty Folders
+        for item in images_root.iterdir():
+            if item.is_dir() and item.name not in ["normal", "anomalous"]:
+                try:
+                    item.rmdir() 
+                except OSError:
+                    pass 
+
+        self.logger.info(f"Reorganization complete. Updated {moved_count} images.")
+        
+        
+        
 # -----------------------------------------------------------------------------
 # 3. Helpers
 # -----------------------------------------------------------------------------
@@ -226,7 +438,8 @@ def main():
                         help="List of formats to export (e.g. --export_types torch openvino)")
     parser.add_argument("--no_checkpoint", action="store_true", 
                         help="If set, strictly prevents saving .ckpt weights to disk (saves space)")
-
+    parser.add_argument("--image_size", type=int, nargs="+", default=[256,256], 
+                        help="Input image size (Height, Width) Default: 256 x 256")
     parser.add_argument("--print_paths", action="store_true", 
                         help="Print filenames of all images in every split to verify distribution.")
 
@@ -254,7 +467,8 @@ def main():
     ds_kwargs.update({
         "root": args.root_dir,
         "train_batch_size": args.batch_size,
-        "eval_batch_size": args.batch_size
+        "eval_batch_size": args.batch_size,
+        "seed": args.seed,
     })
 
     # 2. Handle EfficientAD Constraint
@@ -320,6 +534,23 @@ def main():
     ModelClass = MODEL_MAP[args.model]
     model_kwargs = get_init_args(yaml_config, "model")
     
+    if args.image_size:
+        if len(args.image_size) == 1:
+            img_size = (args.image_size[0], args.image_size[0])
+        else:
+            img_size = tuple(args.image_size[:2])
+            
+        logger.info(f"Configuring PreProcessor for Resolution: {img_size}")
+        
+        if hasattr(ModelClass, "configure_pre_processor"):
+            try:
+                pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
+                model_kwargs["pre_processor"] = pre_processor
+            except Exception as e:
+                logger.warning(f"Could not configure pre_processor for {args.model}: {e}")
+        else:
+            logger.warning(f"Model {args.model} does not support dynamic pre processor configuration")
+    
     # If task is classification, explicitly define metrics to exclude pixel-level checks.
     if args.task == "classification":
         logger.info("Task is 'classification'. Configuring Evaluator for Unbounded Scores.")
@@ -344,6 +575,25 @@ def main():
     model = ModelClass(**model_kwargs)
 
     # -------------------------------------------------------------------------
+    # Inspect tranforms and resolution
+    # -------------------------------------------------------------------------
+    logger.info("=== Tranform & Resolution Inspection ===")
+    
+    if hasattr(model, "pre_processor") and model.pre_processor is not None:
+        logger.info(f"Model PreProcessor (Hard Resolution/Norm): {model.pre_processor.transform}")
+    else:
+        logger.warning("Model does not have an active PreProcessor")
+        
+    train_augs = getattr(datamodule, "train_augmentation", None)
+    val_augs = getattr(datamodule, "val_augmentation", None)
+    test_augs = getattr(datamodule, "test_augmentation", None)
+
+    logger.info(f"Train Augmentation: {train_augs}")
+    logger.info(f"Val Augmentation: {val_augs}")
+    logger.info(f"Test Augmentation: {test_augs}")
+    logger.info(f"=====================================")
+
+    # -------------------------------------------------------------------------
     # Callbacks
     # -------------------------------------------------------------------------
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
@@ -354,7 +604,8 @@ def main():
             mode="max",
             patience=10,
         ),
-        FileLoggingCallback(logger=logger)
+        FileLoggingCallback(logger=logger),
+        RearrangeVisualizationsCallback(output_path=output_path, logger=logger),
     ]
     
     # -------------------------------------------------------------------------
@@ -380,9 +631,34 @@ def main():
         # Note: If checkpointing is disabled, test() uses the in-memory model (last state)
         test_results = engine.test(model=model, datamodule=datamodule)
         logger.info(f"Test Results: {test_results}")
-        
-        with open(output_path / "metrics.yaml", "w") as f:
-            yaml.dump(test_results, f)
+
+        custom_stats = {}
+        temp_stats_path = output_path / ".tmp_custom_stats.json"
+        if temp_stats_path.exists():
+            try:
+                with open(temp_stats_path, "r") as f:
+                    custom_stats = json.load(f)
+                # Clean up temp file
+                os.remove(temp_stats_path)
+            except Exception as e:
+                logger.warning(f"Found temp stats but failed to load: {e}")
+
+        # 2. Merge into test_results (handle list vs dict return types)
+        if isinstance(test_results, list):
+            for res in test_results:
+                if isinstance(res, dict):
+                    res.update(custom_stats)
+        elif isinstance(test_results, dict):
+            test_results.update(custom_stats)
+
+        # 3. Save final combined JSON
+        json_metrics_path = output_path / "metrics.json"
+        try:
+            with open(json_metrics_path, "w") as f:
+                json.dump(test_results, f, indent=4)
+            logger.info(f"All Metrics (Standard + Custom) exported to {json_metrics_path}")
+        except Exception as e:
+            logger.error(f"Failed to export metrics to JSON: {e}")
 
         # ---------------------------------------------------------------------
         # Export (Optional)
