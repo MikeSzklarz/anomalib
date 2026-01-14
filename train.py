@@ -438,8 +438,8 @@ def main():
                         help="List of formats to export (e.g. --export_types torch openvino)")
     parser.add_argument("--no_checkpoint", action="store_true", 
                         help="If set, strictly prevents saving .ckpt weights to disk (saves space)")
-    parser.add_argument("--image_size", type=int, nargs="+", default=[256,256], 
-                        help="Input image size (Height, Width) Default: 256 x 256")
+    parser.add_argument("--image_size", type=int, nargs="+", default=None, 
+                        help="Input image size (Height, Width) Default: None")
     parser.add_argument("--print_paths", action="store_true", 
                         help="Print filenames of all images in every split to verify distribution.")
 
@@ -602,7 +602,7 @@ def main():
         EarlyStopping(
             monitor="AUROC",
             mode="max",
-            patience=10,
+            patience=20,
         ),
         FileLoggingCallback(logger=logger),
         RearrangeVisualizationsCallback(output_path=output_path, logger=logger),
