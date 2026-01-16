@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Type, Set
 
 import torch
+from torchvision.transforms import v2
 import shutil
 
 from lightning.pytorch.callbacks import Callback, EarlyStopping
@@ -440,6 +441,8 @@ def main():
                         help="If set, strictly prevents saving .ckpt weights to disk (saves space)")
     parser.add_argument("--image_size", type=int, nargs="+", default=None, 
                         help="Input image size (Height, Width) Default: None")
+    parser.add_argument("--grayscale", action="store_true",
+                        help="Strictly force input to 3-channel Grayscale")
     parser.add_argument("--print_paths", action="store_true", 
                         help="Print filenames of all images in every split to verify distribution.")
 
@@ -534,22 +537,38 @@ def main():
     ModelClass = MODEL_MAP[args.model]
     model_kwargs = get_init_args(yaml_config, "model")
     
-    if args.image_size:
-        if len(args.image_size) == 1:
-            img_size = (args.image_size[0], args.image_size[0])
-        else:
-            img_size = tuple(args.image_size[:2])
-            
-        logger.info(f"Configuring PreProcessor for Resolution: {img_size}")
-        
-        if hasattr(ModelClass, "configure_pre_processor"):
-            try:
+    if args.image_size or args.grayscale:
+        try:
+            # 1. Determine Resolution
+            if args.image_size:
+                if len(args.image_size) == 1:
+                    img_size = (args.image_size[0], args.image_size[0])
+                else:
+                    img_size = tuple(args.image_size[:2])
+                logger.info(f"Configuring PreProcessor for Resolution: {img_size}")
+                # Generate with specific size
                 pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
-                model_kwargs["pre_processor"] = pre_processor
-            except Exception as e:
-                logger.warning(f"Could not configure pre_processor for {args.model}: {e}")
-        else:
-            logger.warning(f"Model {args.model} does not support dynamic pre processor configuration")
+            else:
+                # User didn't specify size, so use the Model's internal default
+                logger.info("Using model default resolution.")
+                pre_processor = ModelClass.configure_pre_processor()
+
+            # 2. Apply Grayscale Wrapper if requested
+            if args.grayscale:
+                logger.info("--- FORCING GRAYSCALE (3-Channel) ---")
+                # We wrap the existing transform pipeline.
+                # Pipeline becomes: Input -> Grayscale -> [Original_Resize -> Original_Normalize]
+                # We use num_output_channels=3 so it doesn't crash backbones expecting RGB.
+                pre_processor.transform = v2.Compose([
+                    v2.Grayscale(num_output_channels=3),
+                    pre_processor.transform
+                ])
+
+            model_kwargs["pre_processor"] = pre_processor
+
+        except Exception as e:
+            logger.warning(f"Failed to configure custom pre_processor: {e}")
+            logger.warning("Falling back to default model initialization.")
     
     # If task is classification, explicitly define metrics to exclude pixel-level checks.
     if args.task == "classification":

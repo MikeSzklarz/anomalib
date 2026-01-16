@@ -53,6 +53,7 @@ NODELIST=""
 CATEGORY=""
 PARTITION="waccamaw"
 TASK="classification"
+GRAYSCALE_ARG=""
 
 # 3. PARSE CLI ARGUMENTS
 while [[ $# -gt 0 ]]; do
@@ -64,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --task)           TASK="$2"; shift 2 ;;
     --nodelist)       NODELIST="$2"; shift 2 ;; # Expects comma separated: node1,node2
     --partition)      PARTITION="$2"; shift 2 ;;
+    --grayscale)      GRAYSCALE_ARG="--grayscale"; shift ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -83,6 +85,9 @@ echo "Models: ${#MODELS[@]}"
 echo "Dataset: $DATASET"
 echo "Task: $TASK"
 echo "Root: $ROOT_DIR"
+if [ -n "$GRAYSCALE_ARG" ]; then
+    echo "Mode: Grayscale Enabled"
+fi
 if [ "$NUM_NODES" -gt 0 ]; then
     echo "Distributing across nodes: ${NODES_ARRAY[*]}"
 fi
@@ -117,7 +122,8 @@ for model in "${MODELS[@]}"; do
         --root_dir "$ROOT_DIR" \
         --max_epochs "$MAX_EPOCHS" \
         --category "$CATEGORY" \
-        --task "$TASK"
+        --task "$TASK" \
+        $GRAYSCALE_ARG
 
     ((count++))
 done
