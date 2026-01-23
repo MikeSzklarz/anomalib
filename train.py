@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 from anomalib.engine import Engine
 from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
-from anomalib.metrics import Evaluator, AUROC, F1Score
+from anomalib.metrics import Evaluator, AUROC, F1Score, F1Max, AUPR
 
 from anomalib.data import (
     MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D, 
@@ -575,7 +575,9 @@ def main():
         logger.info("Task is 'classification'. Configuring Evaluator for Unbounded Scores.")
         
         val_metrics = [
-            AUROC(fields=["pred_score", "gt_label"])
+            AUROC(fields=["pred_score", "gt_label"]),
+            F1Max(fields=["pred_score", "gt_label"]),
+            AUPR(fields=["pred_score", "gt_label"])
         ]
         
         test_metrics = [
@@ -619,7 +621,7 @@ def main():
     
     callbacks = [
         EarlyStopping(
-            monitor="AUROC",
+            monitor="AUPR",
             mode="max",
             patience=20,
         ),
