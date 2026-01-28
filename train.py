@@ -392,8 +392,6 @@ class RearrangeVisualizationsCallback(Callback):
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images.")
         
-        
-        
 # -----------------------------------------------------------------------------
 # 3. Helpers
 # -----------------------------------------------------------------------------
@@ -489,6 +487,10 @@ def main():
     elif "category" in ds_kwargs:
         # Remove category if dataset (like Kolektor) doesn't support it
         ds_kwargs.pop("category")
+            
+    if args.dataset == "kolektor":
+        ds_kwargs["val_split_mode"] = "from_test"
+        ds_kwargs["val_split_ratio"] = 0.5 # 50% of test for val, 50% for testing
 
     # Logic for 'name' (Folder dataset)
     if args.dataset == "Folder":
@@ -569,30 +571,50 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to configure custom pre_processor: {e}")
             logger.warning("Falling back to default model initialization.")
-    
-    # If task is classification, explicitly define metrics to exclude pixel-level checks.
+
     if args.task == "classification":
-        logger.info("Task is 'classification'. Configuring Evaluator for Unbounded Scores.")
-        
-        val_metrics = [
-            AUROC(fields=["pred_score", "gt_label"]),
-            F1Max(fields=["pred_score", "gt_label"]),
-            AUPR(fields=["pred_score", "gt_label"])
+        # Image-level metrics only
+        # We need these in 'val_metrics' to support Early Stopping
+        image_metrics = [
+            AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
+            F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
+            AUPR(fields=["pred_score", "gt_label"], prefix="image_")
         ]
         
-        test_metrics = [
-            AUROC(fields=["pred_score", "gt_label"]),
-            F1Score(fields=["pred_label", "gt_label"])
-        ]
-        
-        # Create the evaluator with distinct sets
+        # Test metrics can be the same
         evaluator = Evaluator(
-            val_metrics=val_metrics,
-            test_metrics=test_metrics
+            val_metrics=image_metrics,
+            test_metrics=image_metrics
         )
+        # Set the monitor key for EarlyStopping
+        monitor_metric = "image_AUROC"
+
+    elif args.task == "segmentation":
+        # Segmentation: Use Pixel-level (for stopping) + Image-level (for logging)
+        pixel_metrics = [
+            AUROC(fields=["anomaly_map", "gt_mask"], prefix="pixel_"),
+            F1Max(fields=["anomaly_map", "gt_mask"], prefix="pixel_")
+        ]
+        image_metrics = [
+            AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
+            F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
+            AUPR(fields=["pred_score", "gt_label"], prefix="image_")
+        ]
+        evaluator = Evaluator(
+            val_metrics=pixel_metrics + image_metrics, 
+            test_metrics=pixel_metrics + image_metrics
+        )
+        monitor_metric = "pixel_AUROC"
         
+    else:
+        # Fallback for detection or unknown tasks
+        evaluator = None 
+        monitor_metric = "train_loss"
+
+    if evaluator:
         model_kwargs["evaluator"] = evaluator
-    
+        logger.info(f"Injected custom evaluator for {args.task}. Monitor: {monitor_metric}")
+
     model = ModelClass(**model_kwargs)
 
     # -------------------------------------------------------------------------
@@ -621,9 +643,10 @@ def main():
     
     callbacks = [
         EarlyStopping(
-            monitor="AUPR",
-            mode="max",
+            monitor=monitor_metric,
+            mode="max" if "loss" not in monitor_metric else "min",
             patience=20,
+            verbose=True
         ),
         FileLoggingCallback(logger=logger),
         RearrangeVisualizationsCallback(output_path=output_path, logger=logger),
