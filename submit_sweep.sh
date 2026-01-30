@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 1. HARDCODED MODEL LIST
-MODELS=(
+DEFAULT_MODELS=(
     "efficientad"
     "dinomaly"
     "fastflow"
@@ -13,6 +13,8 @@ MODELS=(
     "cflow"
     "padim"
 )
+
+MODELS=()
 
 # 2. SLURM / SWEEP DEFAULTS
 PARTITION="waccamaw"
@@ -35,6 +37,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     
+    --model)
+      MODELS+=("$2")
+      shift 2
+      ;;
+    
     # --- HYBRID ARGS (Used by this script AND train.py) ---
     # We need --dataset for the Job Name, but we also must pass it to python
     --dataset)
@@ -52,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [ ${#MODELS[@]} -eq 0 ]; then
+    MODELS=("${DEFAULT_MODELS[@]}")
+fi
 
 # 4. PREPARATION
 mkdir -p logs/slurm
