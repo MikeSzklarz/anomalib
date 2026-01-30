@@ -429,6 +429,10 @@ def main():
     
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
+    parser.add_argument("--min_epochs", type=int, default=1,
+                        help="Force training for at least this many epochs regardless of performance.")
+    parser.add_argument("--patience", type=int, default=20,
+                        help="Number of epochs to wait for improvement before early stopping.")
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
@@ -673,7 +677,7 @@ def main():
         EarlyStopping(
             monitor=monitor_metric,
             mode="max" if "loss" not in monitor_metric else "min",
-            patience=20,
+            patience=args.patience,
             verbose=True
         ),
         FileLoggingCallback(logger=logger),
@@ -687,6 +691,7 @@ def main():
         callbacks=callbacks,
         logger=tb_logger,
         max_epochs=args.max_epochs,
+        min_epochs=args.min_epochs,
         accelerator=args.accelerator,
         devices=args.devices,
         default_root_dir=str(output_path),
