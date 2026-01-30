@@ -418,6 +418,8 @@ def main():
     parser.add_argument("--model", type=str, required=True, choices=MODEL_MAP.keys())
     parser.add_argument("--dataset", type=str, required=True, choices=DATASET_MAP.keys())
     parser.add_argument("--config", type=str, default=None, help="Optional YAML config path")
+    parser.add_argument("--config_root", type=str, default=None, 
+                        help="Override default config folder (e.g. 'kolektor_configs'). Defaults to './<dataset>_configs/'")
     parser.add_argument("--output_dir", type=str, default="./results")
     
     # Data params
@@ -458,13 +460,15 @@ def main():
     config_path = args.config
     
     if config_path is None:
-        # Build folder name based on dataset: e.g. "kolektor_configs" or "folder_configs"
-        # Build file name based on model: e.g. "supersimplenet.yaml"
-        dataset_config_dir = Path(f"./{args.dataset}_configs")
-        auto_path = dataset_config_dir / f"{args.model}.yaml"
+        if args.config_root:
+            target_folder = Path(args.config_root)
+        else:
+            target_folder = Path(f"./{args.dataset}_configs")
+
+        auto_path = target_folder / f"{args.model}.yaml"
         
         if auto_path.exists():
-            logger.info(f"No --config passed. Auto-detected dataset-specific config at: {auto_path}")
+            logger.info(f"No --config passed. Auto-detected config at: {auto_path}")
             config_path = str(auto_path)
         else:
             logger.info(f"No config provided and no auto-config found at {auto_path}.")
