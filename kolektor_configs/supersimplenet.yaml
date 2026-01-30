@@ -1,0 +1,18 @@
+data:
+  class_path: anomalib.data.Folder
+  init_args:
+    name: "ksdd_mixed"
+    root: "./datasets/custom_ksdd"
+    normal_dir: "train/good"       # Where the model learns "Normal"
+    abnormal_dir: "train/defect"   # Where the model learns "Real Defects"
+    normal_test_dir: "test/good"   # Explicitly point to test sets
+    mask_dir: "ground_truth/train/defect" # Points to the masks for the abnormal training data
+    task: "segmentation"
+    extensions: [".jpg", ".bmp"]
+
+model:
+  class_path: anomalib.models.Supersimplenet
+  init_args:
+    backbone: "wide_resnet50_2.tv_in1k"
+    supervised: true               # UNLOCKS the use of the masks provided above
+    perlin_threshold: 0.2
