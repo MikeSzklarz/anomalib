@@ -455,7 +455,31 @@ def main():
     logger.info(f"Experiment Args: {vars(args)}")
 
     # Load Config
-    yaml_config = load_yaml_config(args.config) if args.config else {}
+    config_path = args.config
+    
+    if config_path is None:
+        # Build folder name based on dataset: e.g. "kolektor_configs" or "folder_configs"
+        # Build file name based on model: e.g. "supersimplenet.yaml"
+        dataset_config_dir = Path(f"./{args.dataset}_configs")
+        auto_path = dataset_config_dir / f"{args.model}.yaml"
+        
+        if auto_path.exists():
+            logger.info(f"No --config passed. Auto-detected dataset-specific config at: {auto_path}")
+            config_path = str(auto_path)
+        else:
+            logger.info(f"No config provided and no auto-config found at {auto_path}.")
+            logger.info("Using CLI defaults.")
+
+    # 2. Load the file
+    yaml_config = load_yaml_config(config_path) if config_path else {}
+
+    # 3. Detailed Config Logging
+    if yaml_config:
+        logger.info(f"=== Active Configuration (Loaded from {config_path}) ===")
+        logger.info(json.dumps(yaml_config, indent=4, default=str))
+        logger.info("==========================================================")
+    else:
+        logger.info("=== Configuration: Purely CLI Arguments (No YAML loaded) ===")
 
     # -------------------------------------------------------------------------
     # Dataset Initialization
