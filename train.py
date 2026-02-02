@@ -190,16 +190,17 @@ class FileLoggingCallback(Callback):
 class RearrangeVisualizationsCallback(Callback):
     """
     1. Collects predictions during testing.
-    2. Calculates the optimal F1 threshold.
+    2. Calculates the optimal F1 threshold (OR reuses it from Test phase).
     3. SEARCHES for the output images on disk.
-    4. Reorganizes files IN-PLACE with source-folder prefixing:
-       - Moves files to: images/anomalous/TP/chip_116_007_TP.jpg
-       - Cleans up empty original folders.
+    4. Reorganizes files IN-PLACE with source-folder prefixing.
     """
-    def __init__(self, output_path: Path, logger=None):
+    def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
         self.output_path = output_path
+        self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
         self.preds_stats = [] 
+        # Store the threshold determined during the "test" phase
+        self.best_threshold = None
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         # 1. Helper to safely grab data
@@ -234,51 +235,73 @@ class RearrangeVisualizationsCallback(Callback):
             self.logger.warning("No predictions collected. Skipping rearrangement.")
             return
 
-        # 1. Flatten all batches
         all_gt = torch.cat([x[0] for x in self.preds_stats])
         all_scores = torch.cat([x[1] for x in self.preds_stats])
         all_paths = []
         for x in self.preds_stats: all_paths.extend(x[2])
 
-        # 2. Determine Best Threshold (Matching Official F1)
-        target_f1 = 0.642857 # Default fallback
-        if "F1Score" in trainer.callback_metrics:
-            target_f1 = trainer.callback_metrics["F1Score"].item()
-
-        thresholds = torch.unique(all_scores)
-        best_diff = float("inf")
         selected_thresh = 0.0
-        
-        is_anom_gt = (all_gt == 1)
-        is_norm_gt = (all_gt == 0)
+        target_f1 = 0.0
 
-        for thresh in thresholds:
-            pred_labels = (all_scores >= thresh).long()
-            tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
-            fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
-            fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
+        if self.subfolder == "test":
+            target_f1 = 0.642857 # Default fallback
+            if "F1Score" in trainer.callback_metrics:
+                target_f1 = trainer.callback_metrics["F1Score"].item()
+
+            thresholds = torch.unique(all_scores)
+            best_diff = float("inf")
             
-            if (tp + fp) > 0 and (tp + fn) > 0:
-                precision = tp / (tp + fp)
-                recall = tp / (tp + fn)
-                if (precision + recall) > 0:
-                    f1 = 2 * (precision * recall) / (precision + recall)
-                    diff = abs(f1 - target_f1)
-                    if diff < best_diff:
-                        best_diff = diff
-                        selected_thresh = thresh
+            is_anom_gt = (all_gt == 1)
+            is_norm_gt = (all_gt == 0)
 
-        # 3. Apply Selected Threshold
+            for thresh in thresholds:
+                pred_labels = (all_scores >= thresh).long()
+                tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
+                fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
+                fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
+                
+                # Check bounds to avoid division by zero or invalid F1
+                if (tp + fp) > 0 and (tp + fn) > 0:
+                    precision = tp / (tp + fp)
+                    recall = tp / (tp + fn)
+                    if (precision + recall) > 0:
+                        f1 = 2 * (precision * recall) / (precision + recall)
+                        diff = abs(f1 - target_f1)
+                        if diff < best_diff:
+                            best_diff = diff
+                            selected_thresh = thresh
+            
+            # SAVE the threshold for later (contamination check)
+            self.best_threshold = selected_thresh
+            self.logger.info(f" [Threshold Logic] Calculated best F1 threshold: {self.best_threshold:.4f}")
+
+        else:
+            # We cannot calculate F1 here because there are NO ground truth anomalies.
+            if self.best_threshold is not None:
+                selected_thresh = self.best_threshold
+                self.logger.info(f" [Threshold Logic] Reusing saved TEST threshold: {selected_thresh:.4f}")
+            else:
+                self.logger.warning(" [Threshold Logic] No saved threshold found! Defaulting to 0.5")
+                selected_thresh = 0.5
+                
+            # Target F1 is not relevant/calculable here
+            target_f1 = 0.0
+
+        if isinstance(selected_thresh, torch.Tensor):
+            selected_thresh = selected_thresh.item()
+
         pred_labels = (all_scores >= selected_thresh).long()
 
-        # 4. Log Stats
+        is_anom_gt = (all_gt == 1)
+        is_norm_gt = (all_gt == 0)
+        
         tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
         fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
         fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
         tn = torch.logical_and(is_norm_gt, (pred_labels == 0)).sum().item()
 
         stats_msg = (
-            f"\n FINAL CLASSIFICATION STATS \n"
+            f"\n FINAL CLASSIFICATION STATS ({self.subfolder.upper()}) \n"
             f" Threshold : {selected_thresh:.4f}\n"
             f" TP: {tp:<5} | FN: {fn}\n"
             f" TN: {tn:<5} | FP: {fp}\n"
@@ -296,21 +319,20 @@ class RearrangeVisualizationsCallback(Callback):
             "Total_Anomalous": int(tp + fn),
             "Total_Normal": int(tn + fp)
         }
-        temp_stats_path = self.output_path / ".tmp_custom_stats.json"
+        
+        temp_stats_path = self.output_path / f".tmp_custom_stats_{self.subfolder}.json"
         try:
             with open(temp_stats_path, "w") as f:
                 json.dump(stats_data, f)
         except Exception as e:
             self.logger.error(f"Failed to stage custom stats: {e}")
 
-        # 5. LOCATE IMAGES FOLDER
         base_search_dir = Path(trainer.default_root_dir)
         sample_file_name = Path(all_paths[0]).name
         found_files = list(base_search_dir.rglob(sample_file_name))
         vis_candidates = [f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
         
         if not vis_candidates:
-            # Fallback
             vis_candidates = [f for f in found_files if "datasets" not in str(f)]
 
         if not vis_candidates:
@@ -325,7 +347,6 @@ class RearrangeVisualizationsCallback(Callback):
 
         self.logger.info(f"Located existing visualizations at: {images_root}")
 
-        # 6. Rearrange Files IN-PLACE
         moved_count = 0
         ops = []
 
@@ -333,20 +354,16 @@ class RearrangeVisualizationsCallback(Callback):
             gt_val = all_gt[i].item()
             pred_val = pred_labels[i].item()
             
-            # Determine Category Folder
             main_cat = "anomalous" if gt_val == 1 else "normal"
             if gt_val == 1 and pred_val == 1: sub_cat = "TP"
             elif gt_val == 1 and pred_val == 0: sub_cat = "FN"
             elif gt_val == 0 and pred_val == 1: sub_cat = "FP"
             else: sub_cat = "TN"
 
-            # Destination: images/anomalous/TP/
-            dest_folder = images_root / main_cat / sub_cat
+            dest_folder = images_root / self.subfolder / main_cat / sub_cat
             
             fname = Path(original_path).name
             
-            # Find THIS specific file inside images_root
-            # Try direct lookup
             potential_paths = [
                 images_root / fname, 
                 images_root / Path(original_path).parent.name / fname 
@@ -360,7 +377,7 @@ class RearrangeVisualizationsCallback(Callback):
             
             if not source_file:
                 found = list(images_root.rglob(fname))
-                candidates = [f for f in found if sub_cat not in str(f.parent)]
+                candidates = [f for f in found if sub_cat not in str(f.parent) and self.subfolder not in str(f.parent)]
                 if candidates:
                     source_file = candidates[0]
 
@@ -373,7 +390,6 @@ class RearrangeVisualizationsCallback(Callback):
                 
                 ops.append((source_file, dest_folder / new_name))
 
-        # Execute Moves
         for src, dst in ops:
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
@@ -382,15 +398,17 @@ class RearrangeVisualizationsCallback(Callback):
             except Exception as e:
                 self.logger.warning(f"Failed to move {src.name}: {e}")
 
-        # 7. Cleanup Empty Folders
         for item in images_root.iterdir():
-            if item.is_dir() and item.name not in ["normal", "anomalous"]:
+            if item.is_dir() and item.name not in ["normal", "anomalous", "test", "contamination"]:
                 try:
                     item.rmdir() 
                 except OSError:
                     pass 
 
-        self.logger.info(f"Reorganization complete. Updated {moved_count} images.")
+        self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
+        
+        self.preds_stats = []
+        
         
 # -----------------------------------------------------------------------------
 # 3. Helpers
@@ -449,6 +467,9 @@ def main():
                         help="Strictly force input to 3-channel Grayscale")
     parser.add_argument("--print_paths", action="store_true", 
                         help="Print filenames of all images in every split to verify distribution.")
+    parser.add_argument("--check_contamination", action="store_true",
+                        help="Run an extra inference pass on the TRAINING set. "
+                             "Images predicted as anomalous (False Positives) could be contaminants.")
 
     args = parser.parse_args()
     
@@ -607,16 +628,21 @@ def main():
     if args.task == "classification":
         # Image-level metrics only
         # We need these in 'val_metrics' to support Early Stopping
-        image_metrics = [
+        val_metrics = [
             AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
             F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
             AUPR(fields=["pred_score", "gt_label"], prefix="image_")
         ]
         
+        test_metrics = [
+            AUROC(fields=["pred_score", "gt_label"]),
+            F1Score(fields=["pred_label", "gt_label"])
+        ]
+        
         # Test metrics can be the same
         evaluator = Evaluator(
-            val_metrics=image_metrics,
-            test_metrics=image_metrics
+            val_metrics=val_metrics,
+            test_metrics=test_metrics
         )
         # Set the monitor key for EarlyStopping
         monitor_metric = "image_AUROC"
@@ -673,6 +699,8 @@ def main():
     # -------------------------------------------------------------------------
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
     
+    rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, logger=logger)
+    
     callbacks = [
         EarlyStopping(
             monitor=monitor_metric,
@@ -681,7 +709,7 @@ def main():
             verbose=True
         ),
         FileLoggingCallback(logger=logger),
-        RearrangeVisualizationsCallback(output_path=output_path, logger=logger),
+        rearrange_cb,
     ]
     
     # -------------------------------------------------------------------------
@@ -708,6 +736,22 @@ def main():
         # Note: If checkpointing is disabled, test() uses the in-memory model (last state)
         test_results = engine.test(model=model, datamodule=datamodule)
         logger.info(f"Test Results: {test_results}")
+
+        if args.check_contamination:
+            logger.info("=======================================================")
+            logger.info("   STARTING CONTAMINATION CHECK (Scanning Train Data)  ")
+            logger.info("=======================================================")
+            logger.info(" NOTE: We are testing on the TRAIN set. All labels are 0 (Normal).")
+            logger.info("       Any 'Anomalous' prediction here is a False Positive (FP).")
+            logger.info("       Check 'results/.../FP' for potential contaminants.")
+            
+            rearrange_cb.subfolder = "contamination"
+
+            train_loader = datamodule.train_dataloader()
+
+            contamination_results = engine.test(model=model, dataloaders=train_loader)
+            
+            logger.info(f"Contamination Check Metrics: {contamination_results}")
 
         custom_stats = {}
         temp_stats_path = output_path / ".tmp_custom_stats.json"
