@@ -25,6 +25,7 @@ from anomalib.engine import Engine
 from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
 from anomalib.metrics import Evaluator, AUROC, F1Score, F1Max, AUPR
+from anomalib.data.utils.split import ValSplitMode, TestSplitMode
 
 from anomalib.data import (
     MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D, 
@@ -739,17 +740,34 @@ def main():
 
         if args.check_contamination:
             logger.info("=======================================================")
-            logger.info("   STARTING CONTAMINATION CHECK (Scanning Train Data)  ")
+            logger.info("   STARTING CONTAMINATION CHECK (Scanning ALL Normal Data)  ")
             logger.info("=======================================================")
-            logger.info(" NOTE: We are testing on the TRAIN set. All labels are 0 (Normal).")
-            logger.info("       Any 'Anomalous' prediction here is a False Positive (FP).")
-            logger.info("       Check 'results/.../FP' for potential contaminants.")
             
             rearrange_cb.subfolder = "contamination"
 
-            train_loader = datamodule.train_dataloader()
+            contamination_kwargs = filtered_kwargs.copy()
+            
+            contamination_kwargs["val_split_mode"] = ValSplitMode.NONE
+            contamination_kwargs["test_split_mode"] = TestSplitMode.NONE
+            
+            contamination_kwargs["normal_split_ratio"] = 0.0
+            contamination_kwargs["val_split_ratio"] = 0.0
+            contamination_kwargs["test_split_ratio"] = 0.0
+            
+            contam_datamodule = DataClass(**contamination_kwargs)
+            contam_datamodule.setup()
 
-            contamination_results = engine.test(model=model, dataloaders=train_loader)
+            main_test_transform = getattr(datamodule.test_data, "transform", None)
+            
+            if main_test_transform and hasattr(contam_datamodule.train_data, "transform"):
+                contam_datamodule.train_data.transform = main_test_transform
+                logger.info("   Forced deterministic transforms (Resize/Norm) on contamination loader.")
+
+            contamination_loader = contam_datamodule.train_dataloader()
+            
+            logger.info(f"   Total 'Good' images to check: {len(contamination_loader.dataset)}")
+
+            contamination_results = engine.test(model=model, dataloaders=contamination_loader)
             
             logger.info(f"Contamination Check Metrics: {contamination_results}")
 
