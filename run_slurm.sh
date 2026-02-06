@@ -4,6 +4,7 @@
 #SBATCH --output=logs/slurm/%j.out
 #SBATCH --error=logs/slurm/%j.err
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=0                         # Use all available memory on node
 #SBATCH --time=24:00:00                 # Time limit
 #SBATCH --exclusive                     # Request exclusive access to the node (optional, remove if unwanted)
