@@ -646,7 +646,7 @@ def main():
             test_metrics=test_metrics
         )
         # Set the monitor key for EarlyStopping
-        monitor_metric = "image_AUROC"
+        monitor_metric = "image_F1Max"
 
     elif args.task == "segmentation":
         # Segmentation: Use Pixel-level (for stopping) + Image-level (for logging)
