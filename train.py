@@ -750,10 +750,6 @@ def main():
             contamination_kwargs["val_split_mode"] = ValSplitMode.NONE
             contamination_kwargs["test_split_mode"] = TestSplitMode.NONE
             
-            contamination_kwargs["normal_split_ratio"] = 0.0
-            contamination_kwargs["val_split_ratio"] = 0.0
-            contamination_kwargs["test_split_ratio"] = 0.0
-            
             contam_datamodule = DataClass(**contamination_kwargs)
             contam_datamodule.setup()
 
