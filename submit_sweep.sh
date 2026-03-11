@@ -36,7 +36,6 @@ FULL_MODELS=(
     "dfkde"
 )
 
-
 MODELS=()
 ZOO_SELECTION="small" 
 
@@ -44,6 +43,7 @@ PARTITION="waccamaw"
 NODELIST=""
 DATASET="unknown"
 TRAIN_ARGS=()
+GLOBAL_BATCH_SIZE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,7 +56,6 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
-
     --nodelist)
       NODELIST="$2"
       shift 2
@@ -65,18 +64,20 @@ while [[ $# -gt 0 ]]; do
       PARTITION="$2"
       shift 2
       ;;
-    
     --model)
       MODELS+=("$2")
       shift 2
       ;;
-    
     --dataset)
       DATASET="$2"
       TRAIN_ARGS+=("$1" "$2")
       shift 2
       ;;
-
+    --batch_size)
+      # Extract batch size from the arguments so we can manipulate it
+      GLOBAL_BATCH_SIZE="$2"
+      shift 2
+      ;;
     *)
       TRAIN_ARGS+=("$1")
       shift
@@ -105,6 +106,9 @@ echo "Zoo Mode: $ZOO_SELECTION"
 echo "Models to run: ${#MODELS[@]}"
 echo "Partition: $PARTITION"
 echo "Job Name Suffix: $DATASET"
+if [ -n "$GLOBAL_BATCH_SIZE" ]; then
+    echo "Requested Batch Size: $GLOBAL_BATCH_SIZE"
+fi
 echo "Passing through args: ${TRAIN_ARGS[*]}"
 if [ "$NUM_NODES" -gt 0 ]; then
     echo "Distributing across nodes: ${NODES_ARRAY[*]}"
@@ -122,13 +126,36 @@ for model in "${MODELS[@]}"; do
         echo "Assigning $model -> $selected_node"
     fi
 
+    # Create a model-specific copy of the training arguments
+    MODEL_TRAIN_ARGS=("${TRAIN_ARGS[@]}")
+    MODEL_BATCH_SIZE="$GLOBAL_BATCH_SIZE"
+
+    # Apply capping logic for memory-intensive models
+    if [[ "$model" == "draem" || "$model" == "uninet" ]]; then
+        if [[ -z "$MODEL_BATCH_SIZE" ]]; then
+            # If no batch size was passed, your python script defaults to 32. Cap it at 16.
+            MODEL_BATCH_SIZE="16"
+            echo "Applying batch size 16 to $model (capping default 32)."
+        elif [[ "$MODEL_BATCH_SIZE" -gt 16 ]]; then
+            # If the user passed a batch size > 16, force it down to 16.
+            MODEL_BATCH_SIZE="16"
+            echo "Capping user batch size to 16 for $model to prevent OOM."
+        fi
+        # If MODEL_BATCH_SIZE <= 16, it leaves it alone.
+    fi
+
+    # Re-inject the batch size into the arguments (if it has a value)
+    if [[ -n "$MODEL_BATCH_SIZE" ]]; then
+        MODEL_TRAIN_ARGS+=("--batch_size" "$MODEL_BATCH_SIZE")
+    fi
+
     sbatch \
         --job-name="${model}_${DATASET}" \
         --partition="$PARTITION" \
         $SLURM_NODE_ARG \
         run_slurm.sh \
         --model "$model" \
-        "${TRAIN_ARGS[@]}"
+        "${MODEL_TRAIN_ARGS[@]}"
 
     ((count++))
 done

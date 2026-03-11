@@ -5,6 +5,8 @@ import warnings
 import yaml
 import json
 import os
+import pandas as pd
+
 from pathlib import Path
 from typing import Dict, Any, Type, Set
 
@@ -191,17 +193,16 @@ class FileLoggingCallback(Callback):
 class RearrangeVisualizationsCallback(Callback):
     """
     1. Collects predictions during testing.
-    2. Calculates the optimal F1 threshold (OR reuses it from Test phase).
-    3. SEARCHES for the output images on disk.
-    4. Reorganizes files IN-PLACE with source-folder prefixing.
+    2. Extracts the exact threshold computed by Anomalib.
+    3. Exports granular image-level predictions to a CSV.
+    4. SEARCHES for the output images on disk.
+    5. Reorganizes files IN-PLACE with source-folder prefixing.
     """
     def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
         self.output_path = output_path
         self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
-        self.preds_stats = [] 
-        # Store the threshold determined during the "test" phase
-        self.best_threshold = None
+        self.preds_stats =[] 
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         # 1. Helper to safely grab data
@@ -238,64 +239,36 @@ class RearrangeVisualizationsCallback(Callback):
 
         all_gt = torch.cat([x[0] for x in self.preds_stats])
         all_scores = torch.cat([x[1] for x in self.preds_stats])
-        all_paths = []
+        
+        all_paths =[]
         for x in self.preds_stats: all_paths.extend(x[2])
 
-        selected_thresh = 0.0
-        target_f1 = 0.0
-
-        if self.subfolder == "test":
-            target_f1 = 0.642857 # Default fallback
-            if "F1Score" in trainer.callback_metrics:
-                target_f1 = trainer.callback_metrics["F1Score"].item()
-
-            thresholds = torch.unique(all_scores)
-            best_diff = float("inf")
+        # SAFELY extract the threshold directly from the model's post-processor
+        selected_thresh = 0.5
+        try:
+            if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "image_threshold"):
+                thresh = pl_module.post_processor.image_threshold
+                if not torch.isnan(thresh):
+                    selected_thresh = float(thresh.item())
+        except Exception as e:
+            self.logger.warning(f" [{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
             
-            is_anom_gt = (all_gt == 1)
-            is_norm_gt = (all_gt == 0)
+        self.logger.info(f" [{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
 
-            for thresh in thresholds:
-                pred_labels = (all_scores >= thresh).long()
-                tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
-                fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
-                fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
-                
-                # Check bounds to avoid division by zero or invalid F1
-                if (tp + fp) > 0 and (tp + fn) > 0:
-                    precision = tp / (tp + fp)
-                    recall = tp / (tp + fn)
-                    if (precision + recall) > 0:
-                        f1 = 2 * (precision * recall) / (precision + recall)
-                        diff = abs(f1 - target_f1)
-                        if diff < best_diff:
-                            best_diff = diff
-                            selected_thresh = thresh
-            
-            # SAVE the threshold for later (contamination check)
-            self.best_threshold = selected_thresh
-            self.logger.info(f" [Threshold Logic] Calculated best F1 threshold: {self.best_threshold:.4f}")
-
-        else:
-            # We cannot calculate F1 here because there are NO ground truth anomalies.
-            if self.best_threshold is not None:
-                selected_thresh = self.best_threshold
-                self.logger.info(f" [Threshold Logic] Reusing saved TEST threshold: {selected_thresh:.4f}")
-            else:
-                self.logger.warning(" [Threshold Logic] No saved threshold found! Defaulting to 0.5")
-                selected_thresh = 0.5
-                
-            # Target F1 is not relevant/calculable here
-            target_f1 = 0.0
-
-        if isinstance(selected_thresh, torch.Tensor):
-            selected_thresh = selected_thresh.item()
-
+        # Compute the pred labels natively using the extracted threshold
         pred_labels = (all_scores >= selected_thresh).long()
+
+        target_f1 = 0.0
+        if self.subfolder == "test":
+            if "image_F1Max" in trainer.callback_metrics:
+                target_f1 = trainer.callback_metrics["image_F1Max"].item()
+            elif "F1Score" in trainer.callback_metrics:
+                target_f1 = trainer.callback_metrics["F1Score"].item()
 
         is_anom_gt = (all_gt == 1)
         is_norm_gt = (all_gt == 0)
         
+        # Calculate confusion matrix stats
         tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
         fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
         fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
@@ -328,13 +301,56 @@ class RearrangeVisualizationsCallback(Callback):
         except Exception as e:
             self.logger.error(f"Failed to stage custom stats: {e}")
 
+        # =====================================================================
+        # NEW: Export Image-Level Predictions to CSV
+        # =====================================================================
+        csv_image_names =[]
+        csv_scores = []
+        csv_thresholds = []
+        csv_class =[]
+
+        for i, original_path in enumerate(all_paths):
+            gt_val = all_gt[i].item()
+            pred_val = pred_labels[i].item()
+            score_val = all_scores[i].item()
+            
+            if gt_val == 1 and pred_val == 1: sub_cat = "TP"
+            elif gt_val == 1 and pred_val == 0: sub_cat = "FN"
+            elif gt_val == 0 and pred_val == 1: sub_cat = "FP"
+            else: sub_cat = "TN"
+
+            # Use Parent/Filename (e.g., 'good/000.png') for better tracking
+            path_obj = Path(original_path)
+            short_name = f"{path_obj.parent.name}/{path_obj.name}"
+
+            csv_image_names.append(short_name)
+            csv_scores.append(score_val)
+            csv_thresholds.append(selected_thresh)
+            csv_class.append(sub_cat)
+
+        try:
+            df = pd.DataFrame({
+                "Image_Name": csv_image_names,
+                "Anomaly_Score": csv_scores,
+                "Threshold": csv_thresholds,
+                "Classification": csv_class
+            })
+            
+            csv_out_path = self.output_path / f"{self.subfolder}_predictions.csv"
+            df.to_csv(csv_out_path, index=False)
+            self.logger.info(f"[{self.subfolder.upper()}] Exported detailed predictions CSV to: {csv_out_path}")
+        except Exception as e:
+            self.logger.error(f" [{self.subfolder.upper()}] Failed to export predictions CSV: {e}")
+        # =====================================================================
+
+
         base_search_dir = Path(trainer.default_root_dir)
         sample_file_name = Path(all_paths[0]).name
         found_files = list(base_search_dir.rglob(sample_file_name))
-        vis_candidates = [f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
+        vis_candidates =[f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
         
         if not vis_candidates:
-            vis_candidates = [f for f in found_files if "datasets" not in str(f)]
+            vis_candidates =[f for f in found_files if "datasets" not in str(f)]
 
         if not vis_candidates:
             self.logger.warning(f"Could not locate visualization for {sample_file_name} in {base_search_dir}")
@@ -349,7 +365,7 @@ class RearrangeVisualizationsCallback(Callback):
         self.logger.info(f"Located existing visualizations at: {images_root}")
 
         moved_count = 0
-        ops = []
+        ops =[]
 
         for i, original_path in enumerate(all_paths):
             gt_val = all_gt[i].item()
@@ -365,7 +381,7 @@ class RearrangeVisualizationsCallback(Callback):
             
             fname = Path(original_path).name
             
-            potential_paths = [
+            potential_paths =[
                 images_root / fname, 
                 images_root / Path(original_path).parent.name / fname 
             ]
@@ -378,7 +394,7 @@ class RearrangeVisualizationsCallback(Callback):
             
             if not source_file:
                 found = list(images_root.rglob(fname))
-                candidates = [f for f in found if sub_cat not in str(f.parent) and self.subfolder not in str(f.parent)]
+                candidates =[f for f in found if sub_cat not in str(f.parent) and self.subfolder not in str(f.parent)]
                 if candidates:
                     source_file = candidates[0]
 
@@ -400,7 +416,7 @@ class RearrangeVisualizationsCallback(Callback):
                 self.logger.warning(f"Failed to move {src.name}: {e}")
 
         for item in images_root.iterdir():
-            if item.is_dir() and item.name not in ["normal", "anomalous", "test", "contamination"]:
+            if item.is_dir() and item.name not in["normal", "anomalous", "test", "contamination"]:
                 try:
                     item.rmdir() 
                 except OSError:
