@@ -95,9 +95,9 @@ DATASET_MAP: Dict[str, Type] = {
 # 2. Logger Setup
 # -----------------------------------------------------------------------------
 
-def setup_logger(output_dir: Path):
+def setup_logger(output_dir: Path, model_name: str):
     output_dir.mkdir(parents=True, exist_ok=True)
-    log_file = output_dir / "training.log"
+    log_file = output_dir / f"{model_name}_training.log"
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -198,10 +198,11 @@ class RearrangeVisualizationsCallback(Callback):
     4. SEARCHES for the output images on disk.
     5. Reorganizes files IN-PLACE with source-folder prefixing.
     """
-    def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
+    def __init__(self, output_path: Path, subfolder: str = "test", logger=None, model_name: str = "model"):
         self.output_path = output_path
         self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
+        self.model_name = model_name
         self.preds_stats =[] 
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
@@ -294,7 +295,7 @@ class RearrangeVisualizationsCallback(Callback):
             "Total_Normal": int(tn + fp)
         }
         
-        temp_stats_path = self.output_path / f".tmp_custom_stats_{self.subfolder}.json"
+        temp_stats_path = self.output_path / f".tmp_{self.model_name}_custom_stats_{self.subfolder}.json"
         try:
             with open(temp_stats_path, "w") as f:
                 json.dump(stats_data, f)
@@ -336,7 +337,7 @@ class RearrangeVisualizationsCallback(Callback):
                 "Classification": csv_class
             })
             
-            csv_out_path = self.output_path / f"{self.subfolder}_predictions.csv"
+            csv_out_path = self.output_path / f"{self.model_name}_{self.subfolder}_predictions.csv"
             df.to_csv(csv_out_path, index=False)
             self.logger.info(f"[{self.subfolder.upper()}] Exported detailed predictions CSV to: {csv_out_path}")
         except Exception as e:
@@ -495,7 +496,7 @@ def main():
     
     # Path Setup
     output_path = Path(args.output_dir) / args.model / args.dataset / args.category
-    logger = setup_logger(output_path)
+    logger = setup_logger(output_path, args.model)
     logger.info(f"Experiment Args: {vars(args)}")
 
     # Load Config
@@ -716,7 +717,7 @@ def main():
     # -------------------------------------------------------------------------
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
     
-    rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, logger=logger)
+    rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, logger=logger, model_name=args.model)
     
     callbacks = [
         EarlyStopping(
@@ -784,17 +785,16 @@ def main():
             logger.info(f"Contamination Check Metrics: {contamination_results}")
 
         custom_stats = {}
-        temp_stats_path = output_path / ".tmp_custom_stats.json"
+        temp_stats_path = output_path / f".tmp_{args.model}_custom_stats_test.json"
         if temp_stats_path.exists():
             try:
                 with open(temp_stats_path, "r") as f:
                     custom_stats = json.load(f)
-                # Clean up temp file
                 os.remove(temp_stats_path)
             except Exception as e:
                 logger.warning(f"Found temp stats but failed to load: {e}")
 
-        # 2. Merge into test_results (handle list vs dict return types)
+        # Merge into test_results
         if isinstance(test_results, list):
             for res in test_results:
                 if isinstance(res, dict):
@@ -802,12 +802,12 @@ def main():
         elif isinstance(test_results, dict):
             test_results.update(custom_stats)
 
-        # 3. Save final combined JSON
-        json_metrics_path = output_path / "metrics.json"
+        # Save final combined JSON with the model prefix
+        json_metrics_path = output_path / f"{args.model}_metrics.json"
         try:
             with open(json_metrics_path, "w") as f:
                 json.dump(test_results, f, indent=4)
-            logger.info(f"All Metrics (Standard + Custom) exported to {json_metrics_path}")
+            logger.info(f"All Metrics (Standard + Custom) exported to {json_metrics_path.name}")
         except Exception as e:
             logger.error(f"Failed to export metrics to JSON: {e}")
 
