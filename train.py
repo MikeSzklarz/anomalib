@@ -464,10 +464,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     
     # Training params
-    parser.add_argument("--max_epochs", type=int, default=999)
-    parser.add_argument("--min_epochs", type=int, default=1,
+    parser.add_argument("--max_epochs", type=int, default=500)
+    parser.add_argument("--min_epochs", type=int, default=15,
                         help="Force training for at least this many epochs regardless of performance.")
-    parser.add_argument("--patience", type=int, default=20,
+    parser.add_argument("--patience", type=int, default=25,
                         help="Number of epochs to wait for improvement before early stopping.")
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
@@ -663,7 +663,7 @@ def main():
             test_metrics=test_metrics
         )
         # Set the monitor key for EarlyStopping
-        monitor_metric = "image_F1Max"
+        monitor_metric = "image_AUROC"
 
     elif args.task == "segmentation":
         # Segmentation: Use Pixel-level (for stopping) + Image-level (for logging)
