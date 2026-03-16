@@ -106,7 +106,7 @@ def setup_logger(output_dir: Path, model_name: str):
     )
     return logging.getLogger("train_script")
 
-def log_dataset_details(datamodule, logger, print_paths=False):
+def log_dataset_details(datamodule, logger, export_paths=False, output_path=None):
     """Logs detailed stats and checks for TRUE data leakage using full paths."""
     logger.info("Setting up datamodule to inspect splits...")
     datamodule.setup()
@@ -139,11 +139,9 @@ def log_dataset_details(datamodule, logger, print_paths=False):
     logger.info(f"  [VAL  ] Total: {n_val} | Normal: {norm_val} | Anomalous: {anom_val}")
     logger.info(f"  [TEST ] Total: {n_test} | Normal: {norm_test} | Anomalous: {anom_test}")
 
-    # Print paths only if requested
-    if print_paths:
+    if export_paths:
         def print_samples(name, files):
             logger.info(f"    Sample Files ({name}):")
-            # Sort and print just the parent/filename to keep logs readable but useful
             short_paths = sorted([f"{Path(f).parent.name}/{Path(f).name}" for f in files])
             for p in short_paths[:5]:
                 logger.info(f"      - .../{p}")
@@ -152,7 +150,23 @@ def log_dataset_details(datamodule, logger, print_paths=False):
         print_samples("VAL", files_val)
         print_samples("TEST", files_test)
 
-    logger.info("=== Data Leakage Check (Full Path Overlap) ===")
+        if output_path is not None:
+            csv_data = []
+            splits = [("Train", files_train), ("Validation", files_val), ("Test", files_test)]
+            
+            for split_name, files in splits:
+                for f in files:
+                    path_obj = Path(f)
+                    short_name = f"{path_obj.parent.name}/{path_obj.name}"
+                    csv_data.append({"Image_Name": short_name, "Split": split_name})
+            
+            try:
+                df = pd.DataFrame(csv_data)
+                csv_out_path = Path(output_path) / "dataset_splits.csv"
+                df.to_csv(csv_out_path, index=False)
+                logger.info(f"=== Exported detailed dataset splits CSV to: {csv_out_path} ===")
+            except Exception as e:
+                logger.error(f"Failed to export dataset splits CSV: {e}")
     
     def check_overlap(set_a, set_b, name_a, name_b):
         overlap = set_a.intersection(set_b)
@@ -483,8 +497,8 @@ def main():
                         help="Input image size (Height, Width) Default: None")
     parser.add_argument("--grayscale", action="store_true",
                         help="Strictly force input to 3-channel Grayscale")
-    parser.add_argument("--print_paths", action="store_true", 
-                        help="Print filenames of all images in every split to verify distribution.")
+    parser.add_argument("--export_paths", action="store_true", 
+                        help="Print sample filenames to console and export all split paths to a CSV file.")
     parser.add_argument("--check_contamination", action="store_true",
                         help="Run an extra inference pass on the TRAINING set. "
                              "Images predicted as anomalous (False Positives) could be contaminants.")
@@ -598,7 +612,7 @@ def main():
 
     try:
         datamodule = DataClass(**filtered_kwargs)
-        log_dataset_details(datamodule, logger, print_paths=args.print_paths)
+        log_dataset_details(datamodule, logger, export_paths=args.export_paths, output_path=output_path)
     except Exception as e:
         logger.error(f"DataModule Error: {e}")
         sys.exit(1)
