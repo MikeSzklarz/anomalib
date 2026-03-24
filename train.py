@@ -6,6 +6,7 @@ import yaml
 import json
 import os
 import pandas as pd
+import numpy as np
 
 from pathlib import Path
 from typing import Dict, Any, Type, Set
@@ -28,6 +29,9 @@ from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
 from anomalib.metrics import Evaluator, AUROC, F1Score, F1Max, AUPR
 from anomalib.data.utils.split import ValSplitMode, TestSplitMode
+
+from anomalib.visualization.image.item_visualizer import DEFAULT_TEXT_CONFIG
+DEFAULT_TEXT_CONFIG["enable"] = False
 
 from anomalib.data import (
     MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D, 
@@ -137,7 +141,7 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
     logger.info("=== Dataset Split Statistics ===")
     logger.info(f"  [TRAIN] Total: {n_train} | Normal: {norm_train} | Anomalous: {anom_train}")
     logger.info(f"  [VAL  ] Total: {n_val} | Normal: {norm_val} | Anomalous: {anom_val}")
-    logger.info(f"  [TEST ] Total: {n_test} | Normal: {norm_test} | Anomalous: {anom_test}")
+    logger.info(f"[TEST ] Total: {n_test} | Normal: {norm_test} | Anomalous: {anom_test}")
 
     if export_paths:
         def print_samples(name, files):
@@ -151,7 +155,7 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
         print_samples("TEST", files_test)
 
         if output_path is not None:
-            csv_data = []
+            csv_data =[]
             splits = [("Train", files_train), ("Validation", files_val), ("Test", files_test)]
             
             for split_name, files in splits:
@@ -268,7 +272,7 @@ class RearrangeVisualizationsCallback(Callback):
         except Exception as e:
             self.logger.warning(f" [{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
             
-        self.logger.info(f" [{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
+        self.logger.info(f"[{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
 
         # Compute the pred labels natively using the extracted threshold
         pred_labels = (all_scores >= selected_thresh).long()
@@ -321,7 +325,7 @@ class RearrangeVisualizationsCallback(Callback):
         # =====================================================================
         csv_image_names =[]
         csv_scores = []
-        csv_thresholds = []
+        csv_thresholds =[]
         csv_class =[]
 
         for i, original_path in enumerate(all_paths):
@@ -439,7 +443,77 @@ class RearrangeVisualizationsCallback(Callback):
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
         
-        self.preds_stats = []
+        self.preds_stats =[]
+
+
+class RawDataExtractionCallback(Callback):
+    """
+    Extracts raw anomaly maps (float32 segmentation), predicted masks (binary), 
+    and ground truth masks during testing. Saves them as individual .npy arrays 
+    into dedicated subdirectories for offline analysis.
+    """
+    def __init__(self, output_path: Path, logger=None):
+        self.output_path = output_path
+        self.logger = logger or logging.getLogger("train_script")
+        
+        # Define the base raw output directory and subdirectories
+        self.raw_out_dir = self.output_path / "raw_outputs"
+        self.amap_dir = self.raw_out_dir / "anomaly_maps"
+        self.pmask_dir = self.raw_out_dir / "pred_masks"
+        self.gmask_dir = self.raw_out_dir / "gt_masks"
+
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        # Helper to safely grab data from outputs/batch
+        def get_item(obj, key):
+            if isinstance(obj, dict): return obj.get(key, None)
+            return getattr(obj, key, None)
+
+        # 1. Extract Data
+        anomaly_map = get_item(outputs, "anomaly_map")
+        if anomaly_map is None: anomaly_map = get_item(batch, "anomaly_map")
+
+        pred_mask = get_item(outputs, "pred_mask")
+        if pred_mask is None: pred_mask = get_item(batch, "pred_mask")
+        
+        # FALLBACK: If the PostProcessor hasn't run yet, pred_mask will be None.
+        # We can dynamically binarize it using the model's pixel threshold.
+        if pred_mask is None and anomaly_map is not None:
+            try:
+                if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "pixel_threshold"):
+                    thresh = pl_module.post_processor.pixel_threshold
+                    if not torch.isnan(thresh):
+                        # Create the binary mask (0 or 1)
+                        pred_mask = (anomaly_map >= thresh.item()).to(torch.uint8)
+            except Exception:
+                pass # Silently proceed with what we have
+
+        gt_mask = get_item(outputs, "gt_mask")
+        if gt_mask is None: gt_mask = get_item(batch, "gt_mask")
+
+        paths = get_item(outputs, "image_path")
+        if paths is None: paths = get_item(batch, "image_path")
+
+        # 2. Process and Save (Move to CPU -> NumPy -> Disk)
+        if paths is not None:
+            for i, path in enumerate(paths):
+                path_obj = Path(str(path))
+                # Format: folder_filename.npy (e.g. chip_116_007.npy)
+                save_name = f"{path_obj.parent.name}_{path_obj.stem}.npy"
+
+                # Save Anomaly Map (Raw Float32 Segmentation)
+                if anomaly_map is not None:
+                    self.amap_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(self.amap_dir / save_name, anomaly_map[i].cpu().numpy())
+                    
+                # Save Predicted Mask (Binary 0/1 Segmentation)
+                if pred_mask is not None:
+                    self.pmask_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(self.pmask_dir / save_name, pred_mask[i].cpu().numpy())
+                    
+                # Save Ground Truth Mask (If available in the dataset)
+                if gt_mask is not None:
+                    self.gmask_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(self.gmask_dir / save_name, gt_mask[i].cpu().numpy())
         
         
 # -----------------------------------------------------------------------------
@@ -644,7 +718,7 @@ def main():
             if args.grayscale:
                 logger.info("--- FORCING GRAYSCALE (3-Channel) ---")
                 # We wrap the existing transform pipeline.
-                # Pipeline becomes: Input -> Grayscale -> [Original_Resize -> Original_Normalize]
+                # Pipeline becomes: Input -> Grayscale ->[Original_Resize -> Original_Normalize]
                 # We use num_output_channels=3 so it doesn't crash backbones expecting RGB.
                 pre_processor.transform = v2.Compose([
                     v2.Grayscale(num_output_channels=3),
@@ -666,7 +740,7 @@ def main():
             AUPR(fields=["pred_score", "gt_label"], prefix="image_")
         ]
         
-        test_metrics = [
+        test_metrics =[
             AUROC(fields=["pred_score", "gt_label"]),
             F1Score(fields=["pred_label", "gt_label"])
         ]
@@ -685,7 +759,7 @@ def main():
             AUROC(fields=["anomaly_map", "gt_mask"], prefix="pixel_"),
             F1Max(fields=["anomaly_map", "gt_mask"], prefix="pixel_")
         ]
-        image_metrics = [
+        image_metrics =[
             AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
             F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
             AUPR(fields=["pred_score", "gt_label"], prefix="image_")
@@ -732,8 +806,9 @@ def main():
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
     
     rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, logger=logger, model_name=args.model)
+    raw_data_cb = RawDataExtractionCallback(output_path=output_path, logger=logger)
     
-    callbacks = [
+    callbacks =[
         EarlyStopping(
             monitor=monitor_metric,
             mode="max" if "loss" not in monitor_metric else "min",
@@ -742,6 +817,7 @@ def main():
         ),
         FileLoggingCallback(logger=logger),
         rearrange_cb,
+        raw_data_cb,  # <-- Added your new raw data extractor callback
     ]
     
     # -------------------------------------------------------------------------
