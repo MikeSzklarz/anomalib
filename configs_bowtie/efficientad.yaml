@@ -1,0 +1,5 @@
+trainer:
+  min_epochs: -1
+  max_epochs: -1
+  min_steps: 70000
+  max_steps: 70000
