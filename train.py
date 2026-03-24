@@ -478,7 +478,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     
     # Training params
-    parser.add_argument("--max_epochs", type=int, default=500)
+    parser.add_argument("--max_epochs", type=int, default=999)
     parser.add_argument("--min_epochs", type=int, default=15,
                         help="Force training for at least this many epochs regardless of performance.")
     parser.add_argument("--patience", type=int, default=25,
@@ -547,10 +547,10 @@ def main():
     # -------------------------------------------------------------------------
     logger.info(f"Initializing DataModule: {args.dataset}")
     DataClass = DATASET_MAP[args.dataset]
-    ds_kwargs = get_init_args(yaml_config, "data")
+    dataset_kwargs = get_init_args(yaml_config, "data")
     
     # 1. Apply Global Overrides
-    ds_kwargs.update({
+    dataset_kwargs.update({
         "root": args.root_dir,
         "train_batch_size": args.batch_size,
         "eval_batch_size": args.batch_size,
@@ -558,9 +558,9 @@ def main():
     })
 
     # 2. Handle EfficientAD Constraint
-    if args.model == "efficientad" and ds_kwargs["train_batch_size"] != 1:
+    if args.model == "efficientad" and dataset_kwargs["train_batch_size"] != 1:
         logger.warning("EfficientAD requires train_batch_size=1. Overriding.")
-        ds_kwargs["train_batch_size"] = 1
+        dataset_kwargs["train_batch_size"] = 1
     
     # 3. Handle Dataset Specific Arguments (Smart Filtering)
     import inspect
@@ -568,47 +568,47 @@ def main():
     
     # Logic for 'category'
     if "category" in valid_args:
-        ds_kwargs["category"] = args.category
-    elif "category" in ds_kwargs:
+        dataset_kwargs["category"] = args.category
+    elif "category" in dataset_kwargs:
         # Remove category if dataset (like Kolektor) doesn't support it
-        ds_kwargs.pop("category")
+        dataset_kwargs.pop("category")
             
     if args.dataset == "kolektor":
-        ds_kwargs["val_split_mode"] = "from_test"
-        ds_kwargs["val_split_ratio"] = 0.5 # 50% of test for val, 50% for testing
+        dataset_kwargs["val_split_mode"] = "from_test"
+        dataset_kwargs["val_split_ratio"] = 0.5 # 50% of test for val, 50% for testing
 
     # Logic for 'name' (Folder dataset)
     if args.dataset == "Folder":
-        ds_kwargs["name"] = args.category
+        dataset_kwargs["name"] = args.category
         
     # Logic for 'name' and 'normal_dir' (Folder dataset)
     if args.dataset == "folder":
         # 1. Set the dataset name
-        ds_kwargs["name"] = args.category if args.category else "custom_folder"
+        dataset_kwargs["name"] = args.category if args.category else "custom_folder"
 
         # 2. Smart-Detect paths relative to the ROOT you passed
         # We look directly inside args.root_dir
         root_p = Path(args.root_dir)
         
         # Smart-Detect 'normal_dir'
-        if "normal_dir" not in ds_kwargs:
+        if "normal_dir" not in dataset_kwargs:
             if (root_p / "train" / "good").exists():
-                ds_kwargs["normal_dir"] = "train/good"  # MVTec Style
+                dataset_kwargs["normal_dir"] = "train/good"  # MVTec Style
             elif (root_p / "good").exists():
-                ds_kwargs["normal_dir"] = "good"        # Simple Style
+                dataset_kwargs["normal_dir"] = "good"        # Simple Style
             else:
-                ds_kwargs["normal_dir"] = "train/good"  # Fallback
+                dataset_kwargs["normal_dir"] = "train/good"  # Fallback
         
         # Smart-Detect 'abnormal_dir'
-        if "abnormal_dir" not in ds_kwargs:
+        if "abnormal_dir" not in dataset_kwargs:
             if (root_p / "test").exists():
-                ds_kwargs["abnormal_dir"] = "test"      # MVTec Style (contains subfolders)
+                dataset_kwargs["abnormal_dir"] = "test"      # MVTec Style (contains subfolders)
             elif (root_p / "defect").exists():
-                ds_kwargs["abnormal_dir"] = "defect"    # Simple Style
+                dataset_kwargs["abnormal_dir"] = "defect"    # Simple Style
 
     # Filter out any kwargs from config/CLI that the specific dataset class doesn't support
     # (e.g. MVTecAD2 crashes if you pass 'val_split_mode')
-    filtered_kwargs = {k: v for k, v in ds_kwargs.items() if k in valid_args}
+    filtered_kwargs = {k: v for k, v in dataset_kwargs.items() if k in valid_args}
 
     try:
         datamodule = DataClass(**filtered_kwargs)
@@ -747,11 +747,28 @@ def main():
     # -------------------------------------------------------------------------
     # Engine
     # -------------------------------------------------------------------------
+    trainer_config = yaml_config.get("trainer", {})
+    
+    config_min_epochs = trainer_config.get("min_epochs", args.min_epochs)
+    config_max_epochs = trainer_config.get("max_epochs", args.max_epochs)
+    
+    config_min_steps = trainer_config.get("min_steps", -1)
+    config_max_steps = trainer_config.get("max_steps", -1)
+    
+    logger.info("=== Epoch Configuration ===")
+    logger.info(f"min_epochs: {trainer_config.get('min_epochs', 'Not Set')}")
+    logger.info(f"max_epochs: {trainer_config.get('max_epochs', 'Not Set')}")
+    logger.info(f"min_steps: {trainer_config.get('min_steps', 'Not Set')}")
+    logger.info(f"max_steps: {trainer_config.get('max_steps', 'Not Set')}")
+    logger.info("=================================")
+    
     engine = Engine(
         callbacks=callbacks,
         logger=tb_logger,
-        max_epochs=args.max_epochs,
-        min_epochs=args.min_epochs,
+        min_epochs=config_min_epochs,
+        max_epochs=config_max_epochs,
+        min_steps=config_min_steps,
+        max_steps=config_max_steps,
         accelerator=args.accelerator,
         devices=args.devices,
         default_root_dir=str(output_path),
