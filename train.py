@@ -43,7 +43,7 @@ from anomalib.models import (
     AnomalyDINO, Cfa, Cflow, Csflow, Dfkde, Dfm, 
     Dinomaly, Draem, Dsr, EfficientAd, Fastflow, 
     Fre, Ganomaly, Padim, Patchcore, ReverseDistillation, 
-    Stfpm, Supersimplenet, Uflow, UniNet, WinClip
+    Stfpm, Supersimplenet, Uflow, UniNet
 )
 
 # -----------------------------------------------------------------------------
@@ -122,7 +122,6 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
         samples = dataset.samples
         n_total = len(samples)
         
-        # Robust label counting
         if 'label_index' in samples:
             n_normal = (samples.label_index == 0).sum()
             n_anom = (samples.label_index == 1).sum()
@@ -130,7 +129,6 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
             n_normal = n_total
             n_anom = 0
             
-        # Use full string path, NOT just filename
         filepaths = set(samples.image_path.astype(str).tolist())
         return n_total, n_normal, n_anom, filepaths
 
@@ -140,8 +138,8 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
 
     logger.info("=== Dataset Split Statistics ===")
     logger.info(f"  [TRAIN] Total: {n_train} | Normal: {norm_train} | Anomalous: {anom_train}")
-    logger.info(f"  [VAL  ] Total: {n_val} | Normal: {norm_val} | Anomalous: {anom_val}")
-    logger.info(f"[TEST ] Total: {n_test} | Normal: {norm_test} | Anomalous: {anom_test}")
+    logger.info(f"[VAL  ] Total: {n_val} | Normal: {norm_val} | Anomalous: {anom_val}")
+    logger.info(f"  [TEST ] Total: {n_test} | Normal: {norm_test} | Anomalous: {anom_test}")
 
     if export_paths:
         def print_samples(name, files):
@@ -155,8 +153,8 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
         print_samples("TEST", files_test)
 
         if output_path is not None:
-            csv_data =[]
-            splits = [("Train", files_train), ("Validation", files_val), ("Test", files_test)]
+            csv_data = []
+            splits =[("Train", files_train), ("Validation", files_val), ("Test", files_test)]
             
             for split_name, files in splits:
                 for f in files:
@@ -176,7 +174,6 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
         overlap = set_a.intersection(set_b)
         if overlap:
             logger.error(f"   CRITICAL: {len(overlap)} images overlap between {name_a} and {name_b}!")
-            # Print first overlapping file to help debug
             logger.error(f"    Example overlap: {list(overlap)[0]}")
         else:
             logger.info(f"      No overlap between {name_a} and {name_b}")
@@ -184,28 +181,20 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
     check_overlap(files_train, files_val, "TRAIN", "VAL")
     check_overlap(files_train, files_test, "TRAIN", "TEST")
     check_overlap(files_val, files_test, "VAL", "TEST")
-    
     logger.info("================================")
     
 class FileLoggingCallback(Callback):
-    """
-    Logs metrics to the python logger at the end of every epoch 
-    so they appear in the text log file.
-    """
+    """Logs metrics to the python logger at the end of every epoch."""
     def __init__(self, logger):
         self.logger = logger
 
     def on_train_epoch_end(self, trainer, pl_module):
         epoch = trainer.current_epoch
-        # Get all logged metrics (this includes losses logged by Anomalib)
         metrics = trainer.callback_metrics
-        
-        # Filter for interesting metrics (loss, auroc, etc) and format them
-        log_parts = [f"Epoch {epoch}"]
+        log_parts =[f"Epoch {epoch}"]
         for name, value in metrics.items():
             if isinstance(value, float) or hasattr(value, 'item'):
                 log_parts.append(f"{name}: {float(value):.4f}")
-        
         self.logger.info(" | ".join(log_parts))    
         
 class RearrangeVisualizationsCallback(Callback):
@@ -213,23 +202,20 @@ class RearrangeVisualizationsCallback(Callback):
     1. Collects predictions during testing.
     2. Extracts the exact threshold computed by Anomalib.
     3. Exports granular image-level predictions to a CSV.
-    4. SEARCHES for the output images on disk.
-    5. Reorganizes files IN-PLACE with source-folder prefixing.
+    4. Reorganizes output files IN-PLACE with source-folder prefixing.
     """
     def __init__(self, output_path: Path, subfolder: str = "test", logger=None, model_name: str = "model"):
         self.output_path = output_path
         self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
         self.model_name = model_name
-        self.preds_stats =[] 
+        self.preds_stats =[]
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        # 1. Helper to safely grab data
         def get_item(obj, key):
             if isinstance(obj, dict): return obj.get(key, None)
             return getattr(obj, key, None)
 
-        # 2. Extract Data
         gt = get_item(outputs, "gt_label")
         if gt is None: gt = get_item(batch, "gt_label")
 
@@ -239,12 +225,10 @@ class RearrangeVisualizationsCallback(Callback):
         paths = get_item(outputs, "image_path")
         if paths is None: paths = get_item(batch, "image_path")
 
-        # 3. Store Data (CPU)
         if gt is not None and pred_score is not None and paths is not None:
             gt = gt.cpu().squeeze()
             score = pred_score.cpu().squeeze()
             
-            # Handle Scalar Edge Cases
             if gt.ndim == 0: gt = gt.unsqueeze(0)
             if score.ndim == 0: score = score.unsqueeze(0)
 
@@ -253,16 +237,14 @@ class RearrangeVisualizationsCallback(Callback):
 
     def on_test_end(self, trainer, pl_module):
         if not self.preds_stats:
-            self.logger.warning("No predictions collected. Skipping rearrangement.")
+            self.logger.warning(f"No predictions collected. Skipping rearrangement for {self.subfolder}.")
             return
 
         all_gt = torch.cat([x[0] for x in self.preds_stats])
         all_scores = torch.cat([x[1] for x in self.preds_stats])
-        
         all_paths =[]
         for x in self.preds_stats: all_paths.extend(x[2])
 
-        # SAFELY extract the threshold directly from the model's post-processor
         selected_thresh = 0.5
         try:
             if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "image_threshold"):
@@ -270,24 +252,21 @@ class RearrangeVisualizationsCallback(Callback):
                 if not torch.isnan(thresh):
                     selected_thresh = float(thresh.item())
         except Exception as e:
-            self.logger.warning(f" [{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
+            self.logger.warning(f"[{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
             
-        self.logger.info(f"[{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
+        self.logger.info(f" [{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
 
-        # Compute the pred labels natively using the extracted threshold
         pred_labels = (all_scores >= selected_thresh).long()
 
         target_f1 = 0.0
-        if self.subfolder == "test":
-            if "image_F1Max" in trainer.callback_metrics:
-                target_f1 = trainer.callback_metrics["image_F1Max"].item()
-            elif "F1Score" in trainer.callback_metrics:
-                target_f1 = trainer.callback_metrics["F1Score"].item()
+        if "image_F1Max" in trainer.callback_metrics:
+            target_f1 = trainer.callback_metrics["image_F1Max"].item()
+        elif "F1Score" in trainer.callback_metrics:
+            target_f1 = trainer.callback_metrics["F1Score"].item()
 
         is_anom_gt = (all_gt == 1)
         is_norm_gt = (all_gt == 0)
         
-        # Calculate confusion matrix stats
         tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
         fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
         fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
@@ -305,12 +284,8 @@ class RearrangeVisualizationsCallback(Callback):
         stats_data = {
             "custom_threshold": float(selected_thresh),
             "custom_F1_score": float(target_f1),
-            "TP": int(tp),
-            "FN": int(fn),
-            "TN": int(tn),
-            "FP": int(fp),
-            "Total_Anomalous": int(tp + fn),
-            "Total_Normal": int(tn + fp)
+            "TP": int(tp), "FN": int(fn), "TN": int(tn), "FP": int(fp),
+            "Total_Anomalous": int(tp + fn), "Total_Normal": int(tn + fp)
         }
         
         temp_stats_path = self.output_path / f".tmp_{self.model_name}_custom_stats_{self.subfolder}.json"
@@ -320,12 +295,9 @@ class RearrangeVisualizationsCallback(Callback):
         except Exception as e:
             self.logger.error(f"Failed to stage custom stats: {e}")
 
-        # =====================================================================
-        # NEW: Export Image-Level Predictions to CSV
-        # =====================================================================
         csv_image_names =[]
-        csv_scores = []
-        csv_thresholds =[]
+        csv_scores =[]
+        csv_thresholds = []
         csv_class =[]
 
         for i, original_path in enumerate(all_paths):
@@ -338,7 +310,6 @@ class RearrangeVisualizationsCallback(Callback):
             elif gt_val == 0 and pred_val == 1: sub_cat = "FP"
             else: sub_cat = "TN"
 
-            # Use Parent/Filename (e.g., 'good/000.png') for better tracking
             path_obj = Path(original_path)
             short_name = f"{path_obj.parent.name}/{path_obj.name}"
 
@@ -359,10 +330,9 @@ class RearrangeVisualizationsCallback(Callback):
             df.to_csv(csv_out_path, index=False)
             self.logger.info(f"[{self.subfolder.upper()}] Exported detailed predictions CSV to: {csv_out_path}")
         except Exception as e:
-            self.logger.error(f" [{self.subfolder.upper()}] Failed to export predictions CSV: {e}")
-        # =====================================================================
+            self.logger.error(f"[{self.subfolder.upper()}] Failed to export predictions CSV: {e}")
 
-
+        # Image Rearrangement
         base_search_dir = Path(trainer.default_root_dir)
         sample_file_name = Path(all_paths[0]).name
         found_files = list(base_search_dir.rglob(sample_file_name))
@@ -381,8 +351,6 @@ class RearrangeVisualizationsCallback(Callback):
         else:
             images_root = sample_path.parent.parent
 
-        self.logger.info(f"Located existing visualizations at: {images_root}")
-
         moved_count = 0
         ops =[]
 
@@ -397,7 +365,6 @@ class RearrangeVisualizationsCallback(Callback):
             else: sub_cat = "TN"
 
             dest_folder = images_root / self.subfolder / main_cat / sub_cat
-            
             fname = Path(original_path).name
             
             potential_paths =[
@@ -418,12 +385,8 @@ class RearrangeVisualizationsCallback(Callback):
                     source_file = candidates[0]
 
             if source_file and source_file.exists():
-                # Get the folder prefix from the ORIGINAL input path (e.g. 'chip', 'good')
                 folder_prefix = Path(original_path).parent.name
-                
-                # Format: folder_filename_TP.jpg (e.g. chip_116_007_TP.jpg)
                 new_name = f"{folder_prefix}_{source_file.stem}_{sub_cat}{source_file.suffix}"
-                
                 ops.append((source_file, dest_folder / new_name))
 
         for src, dst in ops:
@@ -432,38 +395,28 @@ class RearrangeVisualizationsCallback(Callback):
                 shutil.move(str(src), str(dst))
                 moved_count += 1
             except Exception as e:
-                self.logger.warning(f"Failed to move {src.name}: {e}")
+                pass
 
         for item in images_root.iterdir():
-            if item.is_dir() and item.name not in["normal", "anomalous", "test", "contamination"]:
-                try:
-                    item.rmdir() 
-                except OSError:
-                    pass 
+            if item.is_dir() and item.name not in["normal", "anomalous", "test", "val", "contamination"]:
+                try: item.rmdir() 
+                except OSError: pass 
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
-        
         self.preds_stats =[]
-
-
+        
 class RawDataExtractionCallback(Callback):
     """
     Extracts raw anomaly maps (float32 segmentation), predicted masks (binary), 
     and ground truth masks during testing. Saves them as individual .npy arrays 
-    into dedicated subdirectories for offline analysis.
+    into dedicated subdirectories. Dynamically respects `self.subfolder`.
     """
-    def __init__(self, output_path: Path, logger=None):
+    def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
         self.output_path = output_path
+        self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
-        
-        # Define the base raw output directory and subdirectories
-        self.raw_out_dir = self.output_path / "raw_outputs"
-        self.amap_dir = self.raw_out_dir / "anomaly_maps"
-        self.pmask_dir = self.raw_out_dir / "pred_masks"
-        self.gmask_dir = self.raw_out_dir / "gt_masks"
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        # Helper to safely grab data from outputs/batch
         def get_item(obj, key):
             if isinstance(obj, dict): return obj.get(key, None)
             return getattr(obj, key, None)
@@ -475,17 +428,15 @@ class RawDataExtractionCallback(Callback):
         pred_mask = get_item(outputs, "pred_mask")
         if pred_mask is None: pred_mask = get_item(batch, "pred_mask")
         
-        # FALLBACK: If the PostProcessor hasn't run yet, pred_mask will be None.
-        # We can dynamically binarize it using the model's pixel threshold.
+        # Fallback Binarization
         if pred_mask is None and anomaly_map is not None:
             try:
                 if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "pixel_threshold"):
                     thresh = pl_module.post_processor.pixel_threshold
                     if not torch.isnan(thresh):
-                        # Create the binary mask (0 or 1)
                         pred_mask = (anomaly_map >= thresh.item()).to(torch.uint8)
             except Exception:
-                pass # Silently proceed with what we have
+                pass 
 
         gt_mask = get_item(outputs, "gt_mask")
         if gt_mask is None: gt_mask = get_item(batch, "gt_mask")
@@ -493,28 +444,29 @@ class RawDataExtractionCallback(Callback):
         paths = get_item(outputs, "image_path")
         if paths is None: paths = get_item(batch, "image_path")
 
-        # 2. Process and Save (Move to CPU -> NumPy -> Disk)
+        # Create Dynamic Dirs based on self.subfolder
+        raw_out_dir = self.output_path / "raw_outputs" / self.subfolder
+        amap_dir = raw_out_dir / "anomaly_maps"
+        pmask_dir = raw_out_dir / "pred_masks"
+        gmask_dir = raw_out_dir / "gt_masks"
+
+        # 2. Process and Save
         if paths is not None:
             for i, path in enumerate(paths):
                 path_obj = Path(str(path))
-                # Format: folder_filename.npy (e.g. chip_116_007.npy)
                 save_name = f"{path_obj.parent.name}_{path_obj.stem}.npy"
 
-                # Save Anomaly Map (Raw Float32 Segmentation)
                 if anomaly_map is not None:
-                    self.amap_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(self.amap_dir / save_name, anomaly_map[i].cpu().numpy())
+                    amap_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(amap_dir / save_name, anomaly_map[i].cpu().numpy())
                     
-                # Save Predicted Mask (Binary 0/1 Segmentation)
                 if pred_mask is not None:
-                    self.pmask_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(self.pmask_dir / save_name, pred_mask[i].cpu().numpy())
+                    pmask_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(pmask_dir / save_name, pred_mask[i].cpu().numpy())
                     
-                # Save Ground Truth Mask (If available in the dataset)
                 if gt_mask is not None:
-                    self.gmask_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(self.gmask_dir / save_name, gt_mask[i].cpu().numpy())
-        
+                    gmask_dir.mkdir(parents=True, exist_ok=True)
+                    np.save(gmask_dir / save_name, gt_mask[i].cpu().numpy())
         
 # -----------------------------------------------------------------------------
 # 3. Helpers
@@ -541,9 +493,8 @@ def main():
     # Basics
     parser.add_argument("--model", type=str, required=True, choices=MODEL_MAP.keys())
     parser.add_argument("--dataset", type=str, required=True, choices=DATASET_MAP.keys())
-    parser.add_argument("--config", type=str, default=None, help="Optional YAML config path")
-    parser.add_argument("--config_root", type=str, default=None, 
-                        help="Override default config folder (e.g. 'kolektor_configs'). Defaults to './<dataset>_configs/'")
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--config_root", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default="./results")
     
     # Data params
@@ -553,68 +504,42 @@ def main():
     
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
-    parser.add_argument("--min_epochs", type=int, default=15,
-                        help="Force training for at least this many epochs regardless of performance.")
-    parser.add_argument("--patience", type=int, default=25,
-                        help="Number of epochs to wait for improvement before early stopping.")
+    parser.add_argument("--min_epochs", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=25)
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--seed", type=int, default=42)
     
     # Export & Saving
-    parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"], 
-                        help="List of formats to export (e.g. --export_types torch openvino)")
-    parser.add_argument("--no_checkpoint", action="store_true", 
-                        help="If set, strictly prevents saving .ckpt weights to disk (saves space)")
-    parser.add_argument("--image_size", type=int, nargs="+", default=None, 
-                        help="Input image size (Height, Width) Default: None")
-    parser.add_argument("--grayscale", action="store_true",
-                        help="Strictly force input to 3-channel Grayscale")
-    parser.add_argument("--export_paths", action="store_true", 
-                        help="Print sample filenames to console and export all split paths to a CSV file.")
-    parser.add_argument("--check_contamination", action="store_true",
-                        help="Run an extra inference pass on the TRAINING set. "
-                             "Images predicted as anomalous (False Positives) could be contaminants.")
+    parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"])
+    parser.add_argument("--no_checkpoint", action="store_true")
+    parser.add_argument("--image_size", type=int, nargs="+", default=None)
+    parser.add_argument("--grayscale", action="store_true")
+    parser.add_argument("--export_paths", action="store_true")
+    parser.add_argument("--check_contamination", action="store_true")
+    
+    # NEW: Run evaluation on Validation set specifically to extract it
+    parser.add_argument("--eval_val_test", action="store_true", 
+                        help="Run a secondary test pass over the Validation set and merge the CSV outputs.")
 
     args = parser.parse_args()
     
     if args.seed is not None:
         seed_everything(args.seed, workers=True)
     
-    # Path Setup
     output_path = Path(args.output_dir) / args.model / args.dataset / args.category
     logger = setup_logger(output_path, args.model)
     logger.info(f"Experiment Args: {vars(args)}")
 
-    # Load Config
     config_path = args.config
-    
     if config_path is None:
-        if args.config_root:
-            target_folder = Path(args.config_root)
-        else:
-            target_folder = Path(f"./{args.dataset}_configs")
-
+        target_folder = Path(args.config_root) if args.config_root else Path(f"./{args.dataset}_configs")
         auto_path = target_folder / f"{args.model}.yaml"
-        
         if auto_path.exists():
-            logger.info(f"No --config passed. Auto-detected config at: {auto_path}")
             config_path = str(auto_path)
-        else:
-            logger.info(f"No config provided and no auto-config found at {auto_path}.")
-            logger.info("Using CLI defaults.")
 
-    # 2. Load the file
     yaml_config = load_yaml_config(config_path) if config_path else {}
-
-    # 3. Detailed Config Logging
-    if yaml_config:
-        logger.info(f"=== Active Configuration (Loaded from {config_path}) ===")
-        logger.info(json.dumps(yaml_config, indent=4, default=str))
-        logger.info("==========================================================")
-    else:
-        logger.info("=== Configuration: Purely CLI Arguments (No YAML loaded) ===")
 
     # -------------------------------------------------------------------------
     # Dataset Initialization
@@ -623,7 +548,6 @@ def main():
     DataClass = DATASET_MAP[args.dataset]
     dataset_kwargs = get_init_args(yaml_config, "data")
     
-    # 1. Apply Global Overrides
     dataset_kwargs.update({
         "root": args.root_dir,
         "train_batch_size": args.batch_size,
@@ -631,57 +555,37 @@ def main():
         "seed": args.seed,
     })
 
-    # 2. Handle EfficientAD Constraint
     if args.model == "efficientad" and dataset_kwargs["train_batch_size"] != 1:
-        logger.warning("EfficientAD requires train_batch_size=1. Overriding.")
         dataset_kwargs["train_batch_size"] = 1
     
-    # 3. Handle Dataset Specific Arguments (Smart Filtering)
     import inspect
     valid_args = inspect.signature(DataClass.__init__).parameters
     
-    # Logic for 'category'
     if "category" in valid_args:
         dataset_kwargs["category"] = args.category
     elif "category" in dataset_kwargs:
-        # Remove category if dataset (like Kolektor) doesn't support it
         dataset_kwargs.pop("category")
             
     if args.dataset == "kolektor":
         dataset_kwargs["val_split_mode"] = "from_test"
-        dataset_kwargs["val_split_ratio"] = 0.5 # 50% of test for val, 50% for testing
+        dataset_kwargs["val_split_ratio"] = 0.5 
 
-    # Logic for 'name' (Folder dataset)
     if args.dataset == "Folder":
         dataset_kwargs["name"] = args.category
         
-    # Logic for 'name' and 'normal_dir' (Folder dataset)
     if args.dataset == "folder":
-        # 1. Set the dataset name
         dataset_kwargs["name"] = args.category if args.category else "custom_folder"
-
-        # 2. Smart-Detect paths relative to the ROOT you passed
-        # We look directly inside args.root_dir
         root_p = Path(args.root_dir)
         
-        # Smart-Detect 'normal_dir'
         if "normal_dir" not in dataset_kwargs:
-            if (root_p / "train" / "good").exists():
-                dataset_kwargs["normal_dir"] = "train/good"  # MVTec Style
-            elif (root_p / "good").exists():
-                dataset_kwargs["normal_dir"] = "good"        # Simple Style
-            else:
-                dataset_kwargs["normal_dir"] = "train/good"  # Fallback
+            if (root_p / "train" / "good").exists(): dataset_kwargs["normal_dir"] = "train/good"
+            elif (root_p / "good").exists(): dataset_kwargs["normal_dir"] = "good"
+            else: dataset_kwargs["normal_dir"] = "train/good"
         
-        # Smart-Detect 'abnormal_dir'
         if "abnormal_dir" not in dataset_kwargs:
-            if (root_p / "test").exists():
-                dataset_kwargs["abnormal_dir"] = "test"      # MVTec Style (contains subfolders)
-            elif (root_p / "defect").exists():
-                dataset_kwargs["abnormal_dir"] = "defect"    # Simple Style
+            if (root_p / "test").exists(): dataset_kwargs["abnormal_dir"] = "test"
+            elif (root_p / "defect").exists(): dataset_kwargs["abnormal_dir"] = "defect"
 
-    # Filter out any kwargs from config/CLI that the specific dataset class doesn't support
-    # (e.g. MVTecAD2 crashes if you pass 'val_split_mode')
     filtered_kwargs = {k: v for k, v in dataset_kwargs.items() if k in valid_args}
 
     try:
@@ -700,153 +604,57 @@ def main():
     
     if args.image_size or args.grayscale:
         try:
-            # 1. Determine Resolution
             if args.image_size:
-                if len(args.image_size) == 1:
-                    img_size = (args.image_size[0], args.image_size[0])
-                else:
-                    img_size = tuple(args.image_size[:2])
-                logger.info(f"Configuring PreProcessor for Resolution: {img_size}")
-                # Generate with specific size
+                img_size = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
                 pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
             else:
-                # User didn't specify size, so use the Model's internal default
-                logger.info("Using model default resolution.")
                 pre_processor = ModelClass.configure_pre_processor()
 
-            # 2. Apply Grayscale Wrapper if requested
             if args.grayscale:
-                logger.info("--- FORCING GRAYSCALE (3-Channel) ---")
-                # We wrap the existing transform pipeline.
-                # Pipeline becomes: Input -> Grayscale ->[Original_Resize -> Original_Normalize]
-                # We use num_output_channels=3 so it doesn't crash backbones expecting RGB.
-                pre_processor.transform = v2.Compose([
-                    v2.Grayscale(num_output_channels=3),
-                    pre_processor.transform
-                ])
-
+                pre_processor.transform = v2.Compose([v2.Grayscale(num_output_channels=3), pre_processor.transform])
             model_kwargs["pre_processor"] = pre_processor
-
         except Exception as e:
-            logger.warning(f"Failed to configure custom pre_processor: {e}")
             logger.warning("Falling back to default model initialization.")
 
     if args.task == "classification":
-        # Image-level metrics only
-        # We need these in 'val_metrics' to support Early Stopping
-        val_metrics = [
-            AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
-            F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
-            AUPR(fields=["pred_score", "gt_label"], prefix="image_")
-        ]
-        
-        test_metrics =[
-            AUROC(fields=["pred_score", "gt_label"]),
-            F1Score(fields=["pred_label", "gt_label"])
-        ]
-        
-        # Test metrics can be the same
-        evaluator = Evaluator(
-            val_metrics=val_metrics,
-            test_metrics=test_metrics
-        )
-        # Set the monitor key for EarlyStopping
+        val_metrics = [AUROC(fields=["pred_score", "gt_label"], prefix="image_"), F1Max(fields=["pred_score", "gt_label"], prefix="image_"), AUPR(fields=["pred_score", "gt_label"], prefix="image_")]
+        test_metrics = [AUROC(fields=["pred_score", "gt_label"]), F1Score(fields=["pred_label", "gt_label"])]
+        evaluator = Evaluator(val_metrics=val_metrics, test_metrics=test_metrics)
         monitor_metric = "image_AUROC"
-
     elif args.task == "segmentation":
-        # Segmentation: Use Pixel-level (for stopping) + Image-level (for logging)
-        pixel_metrics = [
-            AUROC(fields=["anomaly_map", "gt_mask"], prefix="pixel_"),
-            F1Max(fields=["anomaly_map", "gt_mask"], prefix="pixel_")
-        ]
-        image_metrics =[
-            AUROC(fields=["pred_score", "gt_label"], prefix="image_"),
-            F1Max(fields=["pred_score", "gt_label"], prefix="image_"),
-            AUPR(fields=["pred_score", "gt_label"], prefix="image_")
-        ]
-        evaluator = Evaluator(
-            val_metrics=pixel_metrics + image_metrics, 
-            test_metrics=pixel_metrics + image_metrics
-        )
+        pixel_metrics =[AUROC(fields=["anomaly_map", "gt_mask"], prefix="pixel_"), F1Max(fields=["anomaly_map", "gt_mask"], prefix="pixel_")]
+        image_metrics =[AUROC(fields=["pred_score", "gt_label"], prefix="image_"), F1Max(fields=["pred_score", "gt_label"], prefix="image_"), AUPR(fields=["pred_score", "gt_label"], prefix="image_")]
+        evaluator = Evaluator(val_metrics=pixel_metrics + image_metrics, test_metrics=pixel_metrics + image_metrics)
         monitor_metric = "pixel_AUROC"
-        
     else:
-        # Fallback for detection or unknown tasks
         evaluator = None 
         monitor_metric = "train_loss"
 
-    if evaluator:
-        model_kwargs["evaluator"] = evaluator
-        logger.info(f"Injected custom evaluator for {args.task}. Monitor: {monitor_metric}")
+    if evaluator: model_kwargs["evaluator"] = evaluator
 
     model = ModelClass(**model_kwargs)
 
     # -------------------------------------------------------------------------
-    # Inspect tranforms and resolution
-    # -------------------------------------------------------------------------
-    logger.info("=== Tranform & Resolution Inspection ===")
-    
-    if hasattr(model, "pre_processor") and model.pre_processor is not None:
-        logger.info(f"Model PreProcessor (Hard Resolution/Norm): {model.pre_processor.transform}")
-    else:
-        logger.warning("Model does not have an active PreProcessor")
-        
-    train_augs = getattr(datamodule, "train_augmentation", None)
-    val_augs = getattr(datamodule, "val_augmentation", None)
-    test_augs = getattr(datamodule, "test_augmentation", None)
-
-    logger.info(f"Train Augmentation: {train_augs}")
-    logger.info(f"Val Augmentation: {val_augs}")
-    logger.info(f"Test Augmentation: {test_augs}")
-    logger.info(f"=====================================")
-
-    # -------------------------------------------------------------------------
-    # Callbacks
+    # Callbacks & Engine
     # -------------------------------------------------------------------------
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
     
-    rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, logger=logger, model_name=args.model)
-    raw_data_cb = RawDataExtractionCallback(output_path=output_path, logger=logger)
+    rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, subfolder="test", logger=logger, model_name=args.model)
+    raw_data_cb = RawDataExtractionCallback(output_path=output_path, subfolder="test", logger=logger)
     
     callbacks =[
-        EarlyStopping(
-            monitor=monitor_metric,
-            mode="max" if "loss" not in monitor_metric else "min",
-            patience=args.patience,
-            verbose=True
-        ),
+        EarlyStopping(monitor=monitor_metric, mode="max" if "loss" not in monitor_metric else "min", patience=args.patience, verbose=True),
         FileLoggingCallback(logger=logger),
         rearrange_cb,
-        raw_data_cb,  # <-- Added your new raw data extractor callback
+        raw_data_cb,
     ]
     
-    # -------------------------------------------------------------------------
-    # Engine
-    # -------------------------------------------------------------------------
     trainer_config = yaml_config.get("trainer", {})
-    
-    config_min_epochs = trainer_config.get("min_epochs", args.min_epochs)
-    config_max_epochs = trainer_config.get("max_epochs", args.max_epochs)
-    
-    config_min_steps = trainer_config.get("min_steps", -1)
-    config_max_steps = trainer_config.get("max_steps", -1)
-    
-    logger.info("=== Epoch Configuration ===")
-    logger.info(f"min_epochs: {trainer_config.get('min_epochs', 'Not Set')}")
-    logger.info(f"max_epochs: {trainer_config.get('max_epochs', 'Not Set')}")
-    logger.info(f"min_steps: {trainer_config.get('min_steps', 'Not Set')}")
-    logger.info(f"max_steps: {trainer_config.get('max_steps', 'Not Set')}")
-    logger.info("=================================")
-    
     engine = Engine(
-        callbacks=callbacks,
-        logger=tb_logger,
-        min_epochs=config_min_epochs,
-        max_epochs=config_max_epochs,
-        min_steps=config_min_steps,
-        max_steps=config_max_steps,
-        accelerator=args.accelerator,
-        devices=args.devices,
+        callbacks=callbacks, logger=tb_logger,
+        min_epochs=trainer_config.get("min_epochs", args.min_epochs),
+        max_epochs=trainer_config.get("max_epochs", args.max_epochs),
+        accelerator=args.accelerator, devices=args.devices,
         default_root_dir=str(output_path),
     )
 
@@ -857,89 +665,98 @@ def main():
         logger.info("Starting Fit...")
         engine.fit(model=model, datamodule=datamodule)
         
-        logger.info("Starting Test...")
-        # Note: If checkpointing is disabled, test() uses the in-memory model (last state)
+        # --- 1. NORMAL TEST (Test Set Only) ---
+        logger.info("Starting Standard Test...")
         test_results = engine.test(model=model, datamodule=datamodule)
-        logger.info(f"Test Results: {test_results}")
 
+        # Merge in custom stats if they exist
+        temp_stats_path = output_path / f".tmp_{args.model}_custom_stats_test.json"
+        if temp_stats_path.exists():
+            with open(temp_stats_path, "r") as f: custom_stats = json.load(f)
+            os.remove(temp_stats_path)
+            if isinstance(test_results, list): test_results[0].update(custom_stats)
+            elif isinstance(test_results, dict): test_results.update(custom_stats)
+
+        with open(output_path / f"{args.model}_metrics.json", "w") as f:
+            json.dump(test_results, f, indent=4)
+
+        # --- 2. VALIDATION SET EVALUATION PASS (For Combined Offline Parsing) ---
+        if args.eval_val_test:
+            logger.info("=======================================================")
+            logger.info("   STARTING EVALUATION PASS ON VALIDATION SET  ")
+            logger.info("=======================================================")
+            
+            # Update callbacks to use 'val' subfolder
+            rearrange_cb.subfolder = "val"
+            raw_data_cb.subfolder = "val"
+            
+            logger.info(f"   Validation images to check: {len(datamodule.val_data)}")
+
+            # Run engine test specifically on the validation dataloader
+            val_results = engine.test(model=model, dataloaders=datamodule.val_dataloader())
+            
+            logger.info(f"Validation Pass Metrics: {val_results}")
+            
+            # Extract val stats and clean up
+            temp_stats_path_val = output_path / f".tmp_{args.model}_custom_stats_val.json"
+            if temp_stats_path_val.exists():
+                with open(temp_stats_path_val, "r") as f: val_stats = json.load(f)
+                os.remove(temp_stats_path_val)
+                if isinstance(val_results, list): val_results[0].update(val_stats)
+                elif isinstance(val_results, dict): val_results.update(val_stats)
+                
+            with open(output_path / f"{args.model}_metrics_val.json", "w") as f:
+                json.dump(val_results, f, indent=4)
+                
+            # --- MERGE CSVs FOR EASY OFFLINE PARSING ---
+            try:
+                # Load Test Set Predictions and explicitly mark them
+                df_test = pd.read_csv(output_path / f"{args.model}_test_predictions.csv")
+                df_test.insert(0, "Split", "Test")
+                
+                # Load Validation Set Predictions and explicitly mark them
+                df_val = pd.read_csv(output_path / f"{args.model}_val_predictions.csv")
+                df_val.insert(0, "Split", "Validation")
+                
+                # Combine them into one neat CSV for offline reading
+                df_combined = pd.concat([df_val, df_test], ignore_index=True)
+                combined_csv_path = output_path / f"{args.model}_val_test_combined_predictions.csv"
+                df_combined.to_csv(combined_csv_path, index=False)
+                logger.info(f"Combined Validation & Test CSV exported to: {combined_csv_path}")
+            except Exception as e:
+                logger.warning(f"Failed to merge validation and test CSVs: {e}")
+
+        # --- 3. CONTAMINATION CHECK ---
         if args.check_contamination:
             logger.info("=======================================================")
             logger.info("   STARTING CONTAMINATION CHECK (Scanning ALL Normal Data)  ")
             logger.info("=======================================================")
             
             rearrange_cb.subfolder = "contamination"
+            raw_data_cb.subfolder = "contamination"
 
             contamination_kwargs = filtered_kwargs.copy()
-            
             contamination_kwargs["val_split_mode"] = ValSplitMode.NONE
             contamination_kwargs["test_split_mode"] = TestSplitMode.NONE
             
             contam_datamodule = DataClass(**contamination_kwargs)
             contam_datamodule.setup()
 
-            main_test_transform = getattr(datamodule.test_data, "transform", None)
-            
-            if main_test_transform and hasattr(contam_datamodule.train_data, "transform"):
-                contam_datamodule.train_data.transform = main_test_transform
-                logger.info("   Forced deterministic transforms (Resize/Norm) on contamination loader.")
+            if hasattr(datamodule.test_data, "transform") and hasattr(contam_datamodule.train_data, "transform"):
+                contam_datamodule.train_data.transform = datamodule.test_data.transform
 
             contamination_loader = contam_datamodule.train_dataloader()
-            
-            logger.info(f"   Total 'Good' images to check: {len(contamination_loader.dataset)}")
-
-            contamination_results = engine.test(model=model, dataloaders=contamination_loader)
-            
-            logger.info(f"Contamination Check Metrics: {contamination_results}")
-
-        custom_stats = {}
-        temp_stats_path = output_path / f".tmp_{args.model}_custom_stats_test.json"
-        if temp_stats_path.exists():
-            try:
-                with open(temp_stats_path, "r") as f:
-                    custom_stats = json.load(f)
-                os.remove(temp_stats_path)
-            except Exception as e:
-                logger.warning(f"Found temp stats but failed to load: {e}")
-
-        # Merge into test_results
-        if isinstance(test_results, list):
-            for res in test_results:
-                if isinstance(res, dict):
-                    res.update(custom_stats)
-        elif isinstance(test_results, dict):
-            test_results.update(custom_stats)
-
-        # Save final combined JSON with the model prefix
-        json_metrics_path = output_path / f"{args.model}_metrics.json"
-        try:
-            with open(json_metrics_path, "w") as f:
-                json.dump(test_results, f, indent=4)
-            logger.info(f"All Metrics (Standard + Custom) exported to {json_metrics_path.name}")
-        except Exception as e:
-            logger.error(f"Failed to export metrics to JSON: {e}")
+            engine.test(model=model, dataloaders=contamination_loader)
 
         # ---------------------------------------------------------------------
-        # Export (Optional)
+        # Export
         # ---------------------------------------------------------------------
         if args.export_types:
-            logger.info(f"Attempting export to: {args.export_types}")
             for ext in args.export_types:
                 try:
-                    logger.info(f"Exporting to {ext}...")
-                    
-                    # Convert string arg to Anomalib ExportType Enum
-                    export_enum = ExportType[ext.upper()]
-                    
-                    engine.export(
-                        model=model,
-                        export_type=export_enum,
-                        export_root=str(output_path / "weights"),
-                    )
-                    logger.info(f"Successfully exported {ext}")
+                    engine.export(model=model, export_type=ExportType[ext.upper()], export_root=str(output_path / "weights"))
                 except Exception as e:
                     logger.error(f"Failed to export {ext}. Reason: {e}")
-        else:
-            logger.info("No export types specified. Skipping export.")
 
         logger.info(f"Experiment finished. Results in {output_path}")
         
