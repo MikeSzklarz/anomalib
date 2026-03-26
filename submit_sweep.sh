@@ -1,39 +1,39 @@
 #!/bin/bash
 
 SMALL_MODELS=(
-    "efficientad"
-    "dinomaly"
-    "fastflow"
-    "csflow"
-    "reversedistillation"
-    "patchcore"
-    "stfpm"
-    "uflow"
-    "cflow"
-    "padim"
+    "uflow"                 # Node 0: 628m
+    "csflow"                # Node 1: 324m
+    "dinomaly"              # Node 0: 178m
+    "cflow"                 # Node 1: 217m
+    "reversedistillation"   # Node 0: 100m
+    "efficientad"           # Node 1: 183m
+    "stfpm"                 # Node 0: 20m
+    "fastflow"              # Node 1: 138m (Adjusted to 500 epochs)
+    "padim"                 # Node 0: ~10m (na)
+    "patchcore"             # Node 1: ~10m (na)
 )
 
 FULL_MODELS=(
-    "cflow"
-    "uflow"
-    "dinomaly"
-    "csflow"
-    "ganomaly"
-    "draem"
-    "reversedistillation"
-    "dsr"
-    "efficientad"
-    "cfa"
-    "supersimplenet"
-    "fre"
-    "fastflow"
-    "stfpm"
-    "patchcore"
-    "dfm"
-    "padim"
-    "anomalydino"
-    "uninet"
-    "dfkde"
+    "uflow"                 # Node 0: 628m
+    "csflow"                # Node 1: 324m
+    "efficientad"           # Node 0: 183m
+    "cflow"                 # Node 1: 217m
+    "fastflow"              # Node 0: 138m (Adjusted to 500 epochs)
+    "draem"                 # Node 1: 216m (Adjusted to 300 epochs)
+    "reversedistillation"   # Node 0: 100m
+    "dinomaly"              # Node 1: 178m
+    "ganomaly"              # Node 0: 53m
+    "supersimplenet"        # Node 1: 123m
+    "uninet"                # Node 0: 41m  (Early stopping baseline)
+    "dsr"                   # Node 1: 45m  (Adjusted to 100 epochs)
+    "cfa"                   # Node 0: 9m
+    "fre"                   # Node 1: 25m
+    "padim"                 # Node 0: ~10m (na)
+    "stfpm"                 # Node 1: 20m
+    "dfm"                   # Node 0: ~10m (na)
+    "patchcore"             # Node 1: ~10m (na)
+    "dfkde"                 # Node 0: ~10m (na)
+    "anomalydino"           # Node 1: ~10m (na)
 )
 
 MODELS=()
