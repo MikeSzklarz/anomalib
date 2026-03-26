@@ -7,9 +7,11 @@ import json
 import os
 import pandas as pd
 import numpy as np
+import cv2
 
 from pathlib import Path
 from typing import Dict, Any, Type, Set
+from PIL import Image
 
 import torch
 from torchvision.transforms import v2
@@ -29,6 +31,7 @@ from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
 from anomalib.metrics import Evaluator, AUROC, F1Score, F1Max, AUPR
 from anomalib.data.utils.split import ValSplitMode, TestSplitMode
+from anomalib.visualization.image.functional import visualize_anomaly_map
 
 from anomalib.visualization.image.item_visualizer import DEFAULT_TEXT_CONFIG
 DEFAULT_TEXT_CONFIG["enable"] = False
@@ -407,9 +410,9 @@ class RearrangeVisualizationsCallback(Callback):
         
 class RawDataExtractionCallback(Callback):
     """
-    Extracts raw anomaly maps (float32 segmentation), predicted masks (binary), 
-    and ground truth masks during testing. Saves them as individual .npy arrays 
-    into dedicated subdirectories. Dynamically respects `self.subfolder`.
+    Extracts raw anomaly maps and masks, properly applies GLOBAL normalization 
+    so good images stay "cool" and bad images become "hot", applies the JET 
+    colormap, and saves them as standard 8-bit PNG images.
     """
     def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
         self.output_path = output_path
@@ -444,29 +447,68 @@ class RawDataExtractionCallback(Callback):
         paths = get_item(outputs, "image_path")
         if paths is None: paths = get_item(batch, "image_path")
 
-        # Create Dynamic Dirs based on self.subfolder
+        # Create Dynamic Dirs
         raw_out_dir = self.output_path / "raw_outputs" / self.subfolder
         amap_dir = raw_out_dir / "anomaly_maps"
         pmask_dir = raw_out_dir / "pred_masks"
         gmask_dir = raw_out_dir / "gt_masks"
 
-        # 2. Process and Save
+        # 2. Process and Save as PNGs
         if paths is not None:
             for i, path in enumerate(paths):
                 path_obj = Path(str(path))
-                save_name = f"{path_obj.parent.name}_{path_obj.stem}.npy"
+                save_name = f"{path_obj.parent.name}_{path_obj.stem}.png"
 
+                # --- GLOBALLY NORMALIZED ANOMALY MAP SAVING ---
                 if anomaly_map is not None:
                     amap_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(amap_dir / save_name, anomaly_map[i].cpu().numpy())
+                    amap_np = anomaly_map[i].cpu().numpy()
                     
+                    # 1. Check if the array is already normalized to[0, 1]
+                    is_normalized = (amap_np.min() >= 0.0 and amap_np.max() <= 1.0)
+                    
+                    if not is_normalized:
+                        # 2. Attempt to apply GLOBAL normalization using the model's post-processor stats
+                        try:
+                            pp = getattr(pl_module, "post_processor", None)
+                            if pp is not None:
+                                p_min = getattr(pp, 'pixel_min', torch.tensor(np.nan)).item()
+                                p_max = getattr(pp, 'pixel_max', torch.tensor(np.nan)).item()
+                                p_thresh = getattr(pp, 'pixel_threshold', torch.tensor(np.nan)).item()
+                                
+                                if not np.isnan(p_min) and not np.isnan(p_max) and not np.isnan(p_thresh) and (p_max - p_min) > 0:
+                                    # EXACT Anomalib Global Normalization Formula:
+                                    # Centers the threshold at 0.5 (green/yellow), pushes normal to 0 (blue), anomalies to 1 (red)
+                                    amap_np = ((amap_np - p_thresh) / (p_max - p_min)) + 0.5
+                                    amap_np = np.clip(amap_np, 0, 1)
+                                else:
+                                    raise ValueError("Missing global stats")
+                            else:
+                                raise ValueError("No post processor")
+                        except Exception:
+                            # Fallback to per-image min-max ONLY if global stats completely fail
+                            a_min, a_max = amap_np.min(), amap_np.max()
+                            amap_np = (amap_np - a_min) / (a_max - a_min) if a_max > a_min else amap_np - a_min
+                    
+                    # 3. Scale to[0, 255] and apply JET colormap
+                    amap_uint8 = (amap_np * 255).astype(np.uint8)
+                    heatmap = cv2.applyColorMap(amap_uint8, cv2.COLORMAP_JET)
+                    
+                    # 4. Convert BGR to RGB for PIL, and save
+                    heatmap_rgb = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                    Image.fromarray(heatmap_rgb).save(amap_dir / save_name)
+                    
+                # --- SAVE PREDICTED MASKS ---
                 if pred_mask is not None:
                     pmask_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(pmask_dir / save_name, pred_mask[i].cpu().numpy())
+                    mask_arr = (pred_mask[i].cpu().numpy() * 255).astype(np.uint8)
+                    Image.fromarray(mask_arr, mode='L').save(pmask_dir / save_name)
                     
+                # --- SAVE GROUND TRUTH MASKS ---
                 if gt_mask is not None:
                     gmask_dir.mkdir(parents=True, exist_ok=True)
-                    np.save(gmask_dir / save_name, gt_mask[i].cpu().numpy())
+                    mask_arr = (gt_mask[i].cpu().numpy() * 255).astype(np.uint8)
+                    Image.fromarray(mask_arr, mode='L').save(gmask_dir / save_name)
         
 # -----------------------------------------------------------------------------
 # 3. Helpers
