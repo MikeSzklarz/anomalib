@@ -12,7 +12,7 @@
 [License](LICENSE)
 
 [![python](https://img.shields.io/badge/python-3.10%2B-green)]()
-[![pytorch](https://img.shields.io/badge/pytorch-2.0%2B-orange)]()
+[![pytorch](https://img.shields.io/badge/pytorch-2.6%2B-orange)]()
 [![lightning](https://img.shields.io/badge/lightning-2.2%2B-blue)]()
 [![openvino](https://img.shields.io/badge/openvino-2024.0%2B-purple)]()
 
@@ -31,23 +31,28 @@
 
 ---
 
-> 🌟 **Announcing v2.2.0 Release!** 🌟
+> 🌟 **Announcing v2.3.0 Release!** 🌟
 >
-> We’re thrilled to announce the release of Anomalib v2.2.0, packed with new datasets, metrics, and performance improvements! Some of the highlights are:
-> New datasets
+> We're thrilled to announce the release of Anomalib v2.3.0, featuring new models and many quality-of-life improvements! Some of the highlights are:
+> New models
 >
-> - **3D-ADAM** : A comprehensive dataset for 3D anomaly detection in additive manufacturing.
-> - **BMAD** : Benchmarks for Medical Anomaly Detection, featuring six datasets across five medical domains
+> - **AnomalyDINO** : A new anomaly detection model leveraging DINOv2 features.
+> - **SuperSimpleNet** : Updated to the latest version with improved performance.
 >
-> New metrics
+> New features
 >
-> - **PGn and PBn (CVPR2025)** : Presorted good/bad metrics for more insightful performance evaluation.
-> - **Histogram visualization** of anomaly scores for better interpretability.
+> - **PatchCore half-precision** : Support for FP16 training, reducing memory usage.
+> - **Barebones Engine mode** : A simplified engine mode for lightweight workflows.
+> - **Kaput dataset** : A new dataset for anomaly detection benchmarking.
+> - **XPU device support** : Intel XPU support in TorchInferencer for accelerated inference.
 >
-> Other Improvements
+> Bug fixes
 >
-> - Faster coreset selection for PatchCore model, resulting in ~30% quicker training.
-> - Reduced memory usage for memory bank–based models like PatchCore, PaDiM, and DfKDE.
+> - Fixed PatchCore GPU memory bottleneck (kNN) during inference.
+> - Fixed `F1AdaptiveThreshold` bug when no anomalous images are in the validation set.
+> - Fixed support for non-square input images in Dinomaly model.
+> - Fixed INT8_PTQ and INT8_ACQ export issues.
+> - Improved Windows path compatibility.
 > - Many more code and documentation updates.
 >
 > We value your input! Please share feedback via [GitHub Issues](https://github.com/open-edge-platform/anomalib/issues) or our [Discussions](https://github.com/open-edge-platform/anomalib/discussions)
@@ -97,11 +102,11 @@ To ensure compatibility with your hardware, you can specify a backend during ins
 # CPU support (default, works on all platforms)
 uv pip install "anomalib[cpu]"
 
+# CUDA 12.6 support (Linux/Windows with NVIDIA GPU)
+uv pip install "anomalib[cu126]"
+
 # CUDA 12.4 support (Linux/Windows with NVIDIA GPU)
 uv pip install "anomalib[cu124]"
-
-# CUDA 12.1 support (Linux/Windows with NVIDIA GPU)
-uv pip install "anomalib[cu121]"
 
 # CUDA 11.8 support (Linux/Windows with NVIDIA GPU)
 uv pip install "anomalib[cu118]"
@@ -322,6 +327,63 @@ anomalib benchmark --config tools/experimental/benchmarking/sample.yaml
 >
 > - [Patchcore Results](src/anomalib/models/image/patchcore/README.md#mvtec-ad-dataset)
 > - [Other Models](src/anomalib/models/)
+
+# Anomalib Studio
+
+Anomalib Studio is a low/no-code web application that allows users to train and deploy anomaly detection models. It enables users to leverage Anomalib's features in their operational environment. Users can connect USB and IP cameras, or use a folder of images, as input to the training pipeline. The tool allows direct output to their industrial pipelines through ROS messages, MQTT, etc.
+
+<p align="center">
+  <img src="docs/source/_static/images/anomalib_studio.png" alt="Anomalib Studio" />
+</p>
+
+The source code for Anomalib Studio lives in the [application](application) folder.
+
+Anomalib Studio is available as two distributions:
+
+1. As a [docker container](application/docker)
+2. As a [standalone application](application/ui)
+
+For more information on each, refer to the respective README files.
+
+## Get started with development build
+
+### Setup Backend Dependencies
+
+> [!NOTE]
+> This assumes that you have `uv` installed. If not, please refer to the [installation guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+cd application/backend
+uv sync --extra xpu # or uv sync --extra cu124 for CUDA 12.4, uv sync --extra cpu for CPU
+```
+
+### Setup Frontend Dependencies
+
+```bash
+cd application/ui
+npm install
+```
+
+### Run the application
+
+> [!IMPORTANT]
+> Both backend and frontend dependencies should be installed before running the application.
+
+Run the backend server:
+
+```bash
+cd application/backend
+./run.sh
+```
+
+Run the frontend server:
+
+```bash
+cd application/ui
+npm run start
+```
+
+Navigate to [http://localhost:3000](http://localhost:3000) to see the application.
 
 # ✍️ Reference
 
