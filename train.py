@@ -5,6 +5,7 @@ import warnings
 import yaml
 import json
 import os
+import types
 import pandas as pd
 import numpy as np
 import cv2
@@ -31,7 +32,6 @@ from anomalib.deploy import ExportType
 from anomalib.loggers import AnomalibTensorBoardLogger
 from anomalib.metrics import Evaluator, AUROC, F1Score, F1Max, AUPR
 from anomalib.data.utils.split import ValSplitMode, TestSplitMode
-from anomalib.visualization.image.functional import visualize_anomaly_map
 
 from anomalib.visualization.image.item_visualizer import DEFAULT_TEXT_CONFIG
 DEFAULT_TEXT_CONFIG["enable"] = False
@@ -76,13 +76,6 @@ MODEL_MAP: Dict[str, Type] = {
     "uninet": UniNet
 }
 
-# Models that require iterative training (Gradient Descent)
-ITERATIVE_MODELS: Set[str] = {
-    "cflow", "csflow", "draem", "dsr", "efficientad", "fastflow", 
-    "fre", "ganomaly", "reversedistillation", "stfpm", 
-    "supersimplenet", "uflow", "uninet", "dinomaly"
-}
-        
 DATASET_MAP: Dict[str, Type] = {
     "mvtecad": MVTecAD,
     "mvtecloco": MVTecLOCO,
@@ -97,9 +90,8 @@ DATASET_MAP: Dict[str, Type] = {
     "ucsdped": UCSDped
 }
 
-
 # -----------------------------------------------------------------------------
-# 2. Logger Setup
+# 2. Logger Setup & Utils
 # -----------------------------------------------------------------------------
 
 def setup_logger(output_dir: Path, model_name: str):
@@ -116,6 +108,8 @@ def setup_logger(output_dir: Path, model_name: str):
 def log_dataset_details(datamodule, logger, export_paths=False, output_path=None):
     """Logs detailed stats and checks for TRUE data leakage using full paths."""
     logger.info("Setting up datamodule to inspect splits...")
+    
+    # This triggers datamodule._setup() (which we intercept), then it performs splits
     datamodule.setup()
 
     def get_info(dataset):
@@ -201,12 +195,6 @@ class FileLoggingCallback(Callback):
         self.logger.info(" | ".join(log_parts))    
         
 class RearrangeVisualizationsCallback(Callback):
-    """
-    1. Collects predictions during testing.
-    2. Extracts the exact threshold computed by Anomalib.
-    3. Exports granular image-level predictions to a CSV.
-    4. Reorganizes output files IN-PLACE with source-folder prefixing.
-    """
     def __init__(self, output_path: Path, subfolder: str = "test", logger=None, model_name: str = "model"):
         self.output_path = output_path
         self.subfolder = subfolder
@@ -300,7 +288,7 @@ class RearrangeVisualizationsCallback(Callback):
 
         csv_image_names =[]
         csv_scores =[]
-        csv_thresholds = []
+        csv_thresholds =[]
         csv_class =[]
 
         for i, original_path in enumerate(all_paths):
@@ -409,11 +397,6 @@ class RearrangeVisualizationsCallback(Callback):
         self.preds_stats =[]
         
 class RawDataExtractionCallback(Callback):
-    """
-    Extracts raw anomaly maps and masks, properly applies GLOBAL normalization 
-    so good images stay "cool" and bad images become "hot", applies the JET 
-    colormap, and saves them as standard 8-bit PNG images.
-    """
     def __init__(self, output_path: Path, subfolder: str = "test", logger=None):
         self.output_path = output_path
         self.subfolder = subfolder
@@ -424,14 +407,12 @@ class RawDataExtractionCallback(Callback):
             if isinstance(obj, dict): return obj.get(key, None)
             return getattr(obj, key, None)
 
-        # 1. Extract Data
         anomaly_map = get_item(outputs, "anomaly_map")
         if anomaly_map is None: anomaly_map = get_item(batch, "anomaly_map")
 
         pred_mask = get_item(outputs, "pred_mask")
         if pred_mask is None: pred_mask = get_item(batch, "pred_mask")
         
-        # Fallback Binarization
         if pred_mask is None and anomaly_map is not None:
             try:
                 if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "pixel_threshold"):
@@ -447,28 +428,22 @@ class RawDataExtractionCallback(Callback):
         paths = get_item(outputs, "image_path")
         if paths is None: paths = get_item(batch, "image_path")
 
-        # Create Dynamic Dirs
         raw_out_dir = self.output_path / "raw_outputs" / self.subfolder
         amap_dir = raw_out_dir / "anomaly_maps"
         pmask_dir = raw_out_dir / "pred_masks"
         gmask_dir = raw_out_dir / "gt_masks"
 
-        # 2. Process and Save as PNGs
         if paths is not None:
             for i, path in enumerate(paths):
                 path_obj = Path(str(path))
                 save_name = f"{path_obj.parent.name}_{path_obj.stem}.png"
 
-                # --- GLOBALLY NORMALIZED ANOMALY MAP SAVING ---
                 if anomaly_map is not None:
                     amap_dir.mkdir(parents=True, exist_ok=True)
                     amap_np = anomaly_map[i].cpu().numpy()
                     
-                    # 1. Check if the array is already normalized to[0, 1]
                     is_normalized = (amap_np.min() >= 0.0 and amap_np.max() <= 1.0)
-                    
                     if not is_normalized:
-                        # 2. Attempt to apply GLOBAL normalization using the model's post-processor stats
                         try:
                             pp = getattr(pl_module, "post_processor", None)
                             if pp is not None:
@@ -477,8 +452,6 @@ class RawDataExtractionCallback(Callback):
                                 p_thresh = getattr(pp, 'pixel_threshold', torch.tensor(np.nan)).item()
                                 
                                 if not np.isnan(p_min) and not np.isnan(p_max) and not np.isnan(p_thresh) and (p_max - p_min) > 0:
-                                    # EXACT Anomalib Global Normalization Formula:
-                                    # Centers the threshold at 0.5 (green/yellow), pushes normal to 0 (blue), anomalies to 1 (red)
                                     amap_np = ((amap_np - p_thresh) / (p_max - p_min)) + 0.5
                                     amap_np = np.clip(amap_np, 0, 1)
                                 else:
@@ -486,30 +459,24 @@ class RawDataExtractionCallback(Callback):
                             else:
                                 raise ValueError("No post processor")
                         except Exception:
-                            # Fallback to per-image min-max ONLY if global stats completely fail
                             a_min, a_max = amap_np.min(), amap_np.max()
                             amap_np = (amap_np - a_min) / (a_max - a_min) if a_max > a_min else amap_np - a_min
                     
-                    # 3. Scale to[0, 255] and apply JET colormap
                     amap_uint8 = (amap_np * 255).astype(np.uint8)
                     heatmap = cv2.applyColorMap(amap_uint8, cv2.COLORMAP_JET)
-                    
-                    # 4. Convert BGR to RGB for PIL, and save
                     heatmap_rgb = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
                     Image.fromarray(heatmap_rgb).save(amap_dir / save_name)
                     
-                # --- SAVE PREDICTED MASKS ---
                 if pred_mask is not None:
                     pmask_dir.mkdir(parents=True, exist_ok=True)
                     mask_arr = (pred_mask[i].cpu().numpy() * 255).astype(np.uint8)
                     Image.fromarray(mask_arr, mode='L').save(pmask_dir / save_name)
                     
-                # --- SAVE GROUND TRUTH MASKS ---
                 if gt_mask is not None:
                     gmask_dir.mkdir(parents=True, exist_ok=True)
                     mask_arr = (gt_mask[i].cpu().numpy() * 255).astype(np.uint8)
                     Image.fromarray(mask_arr, mode='L').save(gmask_dir / save_name)
-        
+
 # -----------------------------------------------------------------------------
 # 3. Helpers
 # -----------------------------------------------------------------------------
@@ -543,6 +510,7 @@ def main():
     parser.add_argument("--root_dir", type=str, default="./datasets")
     parser.add_argument("--category", type=str, default="")
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--exclude_root", type=str, default=None, help="Directory containing CSV/TXT files of images to exclude per model.")
     
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
@@ -560,8 +528,6 @@ def main():
     parser.add_argument("--grayscale", action="store_true")
     parser.add_argument("--export_paths", action="store_true")
     parser.add_argument("--check_contamination", action="store_true")
-    
-    # NEW: Run evaluation on Validation set specifically to extract it
     parser.add_argument("--eval_val_test", action="store_true", 
                         help="Run a secondary test pass over the Validation set and merge the CSV outputs.")
 
@@ -582,6 +548,40 @@ def main():
             config_path = str(auto_path)
 
     yaml_config = load_yaml_config(config_path) if config_path else {}
+
+    # Extract dynamic exclusion lists matching the active model
+    exclude_files = set()
+    if args.exclude_root:
+        exclude_dir = Path(args.exclude_root)
+        csv_path = exclude_dir / f"{args.model}.csv"
+        txt_path = exclude_dir / f"{args.model}.txt"
+        
+        target_path = None
+        if csv_path.exists(): target_path = csv_path
+        elif txt_path.exists(): target_path = txt_path
+        
+        if target_path:
+            logger.info(f"Loading exclusion list from: {target_path}")
+            if target_path.suffix == ".csv":
+                try:
+                    df_ex = pd.read_csv(target_path)
+                    if 'Filename' in df_ex.columns:
+                        exclude_files = set(df_ex['Filename'].astype(str).str.strip().tolist())
+                    else:
+                        df_ex = pd.read_csv(target_path, header=None)
+                        exclude_files = set(df_ex.iloc[:, 0].astype(str).str.strip().tolist())
+                except pd.errors.EmptyDataError:
+                    logger.warning(f"Exclusion file {target_path} is empty.")
+                except Exception as e:
+                    logger.error(f"Failed to read exclusion CSV: {e}")
+            else:
+                try:
+                    with open(target_path, "r") as f:
+                        exclude_files = set([line.strip() for line in f.readlines() if line.strip()])
+                except Exception as e:
+                    logger.error(f"Failed to read exclusion TXT: {e}")
+        else:
+            logger.warning(f"Exclude root '{args.exclude_root}' provided but no exclusion file found for model '{args.model}'")
 
     # -------------------------------------------------------------------------
     # Dataset Initialization
@@ -632,7 +632,63 @@ def main():
 
     try:
         datamodule = DataClass(**filtered_kwargs)
+
+        # ==============================================================================
+        # INJECT PRE-SPLIT FILTERING 
+        # Here we Monkey-Patch the _setup method before datamodule.setup() is called
+        # so that files are removed from the DataFrames BEFORE they are mathematically 
+        # split into val and test pools.
+        # ==============================================================================
+        if exclude_files:
+            original_setup = datamodule._setup
+            
+            def custom_setup(self_dm, stage=None):
+                # 1. First, call the original _setup to load the physical files into memory
+                original_setup(stage)
+                
+                logger.info("Applying exclusion filter BEFORE dataset splits...")
+                
+                # 2. Safely filter the Pandas DataFrames in memory
+                def filter_samples(dataset, subset_name):
+                    if not dataset or not hasattr(dataset, "samples"):
+                        return 0
+                        
+                    orig_len = len(dataset.samples)
+                    if orig_len == 0:
+                        return 0
+                        
+                    keep_mask =[]
+                    for img_path in dataset.samples["image_path"]:
+                        path_obj = Path(img_path)
+                        expected_fp_name = f"{path_obj.parent.name}_{path_obj.stem}_FP{path_obj.suffix}"
+                        exact_name = path_obj.name
+                        
+                        if expected_fp_name in exclude_files or exact_name in exclude_files or str(path_obj) in exclude_files:
+                            keep_mask.append(False)
+                        else:
+                            keep_mask.append(True)
+                    
+                    if not all(keep_mask):
+                        dataset.samples = dataset.samples[keep_mask].reset_index(drop=True)
+                        return orig_len - len(dataset.samples)
+                    return 0
+
+                r_train = filter_samples(getattr(self_dm, "train_data", None), "train_data")
+                r_test = filter_samples(getattr(self_dm, "test_data", None), "test_data")
+                
+                total_removed = r_train + r_test
+                if total_removed > 0:
+                    logger.info(f"Successfully removed {total_removed} contaminated files before splitting.")
+                else:
+                    logger.info("No files matched the exclusion list during pre-split filtering.")
+            
+            # Rebind the method to the instantiated datamodule
+            datamodule._setup = types.MethodType(custom_setup, datamodule)
+        # ==============================================================================
+
+        # This triggers datamodule.setup() which now calls our injected code!
         log_dataset_details(datamodule, logger, export_paths=args.export_paths, output_path=output_path)
+
     except Exception as e:
         logger.error(f"DataModule Error: {e}")
         sys.exit(1)
@@ -659,7 +715,7 @@ def main():
             logger.warning("Falling back to default model initialization.")
 
     if args.task == "classification":
-        val_metrics = [AUROC(fields=["pred_score", "gt_label"], prefix="image_"), F1Max(fields=["pred_score", "gt_label"], prefix="image_"), AUPR(fields=["pred_score", "gt_label"], prefix="image_")]
+        val_metrics =[AUROC(fields=["pred_score", "gt_label"], prefix="image_"), F1Max(fields=["pred_score", "gt_label"], prefix="image_"), AUPR(fields=["pred_score", "gt_label"], prefix="image_")]
         test_metrics = [AUROC(fields=["pred_score", "gt_label"]), F1Score(fields=["pred_label", "gt_label"])]
         evaluator = Evaluator(val_metrics=val_metrics, test_metrics=test_metrics)
         monitor_metric = "image_AUROC"
@@ -711,7 +767,6 @@ def main():
         logger.info("Starting Standard Test...")
         test_results = engine.test(model=model, datamodule=datamodule)
 
-        # Merge in custom stats if they exist
         temp_stats_path = output_path / f".tmp_{args.model}_custom_stats_test.json"
         if temp_stats_path.exists():
             with open(temp_stats_path, "r") as f: custom_stats = json.load(f)
@@ -722,24 +777,20 @@ def main():
         with open(output_path / f"{args.model}_metrics.json", "w") as f:
             json.dump(test_results, f, indent=4)
 
-        # --- 2. VALIDATION SET EVALUATION PASS (For Combined Offline Parsing) ---
+        # --- 2. VALIDATION SET EVALUATION PASS ---
         if args.eval_val_test:
             logger.info("=======================================================")
             logger.info("   STARTING EVALUATION PASS ON VALIDATION SET  ")
             logger.info("=======================================================")
             
-            # Update callbacks to use 'val' subfolder
             rearrange_cb.subfolder = "val"
             raw_data_cb.subfolder = "val"
             
             logger.info(f"   Validation images to check: {len(datamodule.val_data)}")
 
-            # Run engine test specifically on the validation dataloader
             val_results = engine.test(model=model, dataloaders=datamodule.val_dataloader())
-            
             logger.info(f"Validation Pass Metrics: {val_results}")
             
-            # Extract val stats and clean up
             temp_stats_path_val = output_path / f".tmp_{args.model}_custom_stats_val.json"
             if temp_stats_path_val.exists():
                 with open(temp_stats_path_val, "r") as f: val_stats = json.load(f)
@@ -750,17 +801,13 @@ def main():
             with open(output_path / f"{args.model}_metrics_val.json", "w") as f:
                 json.dump(val_results, f, indent=4)
                 
-            # --- MERGE CSVs FOR EASY OFFLINE PARSING ---
             try:
-                # Load Test Set Predictions and explicitly mark them
                 df_test = pd.read_csv(output_path / f"{args.model}_test_predictions.csv")
                 df_test.insert(0, "Split", "Test")
                 
-                # Load Validation Set Predictions and explicitly mark them
                 df_val = pd.read_csv(output_path / f"{args.model}_val_predictions.csv")
                 df_val.insert(0, "Split", "Validation")
                 
-                # Combine them into one neat CSV for offline reading
                 df_combined = pd.concat([df_val, df_test], ignore_index=True)
                 combined_csv_path = output_path / f"{args.model}_val_test_combined_predictions.csv"
                 df_combined.to_csv(combined_csv_path, index=False)
@@ -782,6 +829,28 @@ def main():
             contamination_kwargs["test_split_mode"] = TestSplitMode.NONE
             
             contam_datamodule = DataClass(**contamination_kwargs)
+
+            # Re-apply the same monkey patch so it also filters out contaminants from this secondary check!
+            if exclude_files:
+                original_setup_contam = contam_datamodule._setup
+                def custom_setup_contam(self_dm, stage=None):
+                    original_setup_contam(stage)
+                    def filter_samples(dataset):
+                        if not dataset or not hasattr(dataset, "samples"): return
+                        keep_mask = []
+                        for img_path in dataset.samples["image_path"]:
+                            path_obj = Path(img_path)
+                            expected_fp_name = f"{path_obj.parent.name}_{path_obj.stem}_FP{path_obj.suffix}"
+                            if expected_fp_name in exclude_files or path_obj.name in exclude_files or str(path_obj) in exclude_files:
+                                keep_mask.append(False)
+                            else: keep_mask.append(True)
+                        if not all(keep_mask):
+                            dataset.samples = dataset.samples[keep_mask].reset_index(drop=True)
+                    
+                    filter_samples(getattr(self_dm, "train_data", None))
+                    filter_samples(getattr(self_dm, "test_data", None))
+                contam_datamodule._setup = types.MethodType(custom_setup_contam, contam_datamodule)
+
             contam_datamodule.setup()
 
             if hasattr(datamodule.test_data, "transform") and hasattr(contam_datamodule.train_data, "transform"):
