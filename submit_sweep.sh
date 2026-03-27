@@ -1,39 +1,39 @@
 #!/bin/bash
 
 SMALL_MODELS=(
-    "uflow"                 # Node 0: 628m
-    "csflow"                # Node 1: 324m
-    "dinomaly"              # Node 0: 178m
-    "cflow"                 # Node 1: 217m
-    "reversedistillation"   # Node 0: 100m
-    "efficientad"           # Node 1: 183m
-    "stfpm"                 # Node 0: 20m
-    "fastflow"              # Node 1: 138m (Adjusted to 500 epochs)
-    "padim"                 # Node 0: ~10m (na)
-    "patchcore"             # Node 1: ~10m (na)
+    "uflow"                 # Node 0: 705m
+    "csflow"                # Node 1: 340m
+    "fastflow"              # Node 0: 121m
+    "cflow"                 # Node 1: 239m
+    "reversedistillation"   # Node 0: 105m
+    "dinomaly"              # Node 1: 199m
+    "padim"                 # Node 0: 0m
+    "efficientad"           # Node 1: 104m
+    "patchcore"             # Node 0: 0m
+    "stfpm"                 # Node 1: 20m
 )
 
 FULL_MODELS=(
-    "uflow"                 # Node 0: 628m
-    "csflow"                # Node 1: 324m
-    "efficientad"           # Node 0: 183m
-    "cflow"                 # Node 1: 217m
-    "fastflow"              # Node 0: 138m (Adjusted to 500 epochs)
-    "draem"                 # Node 1: 216m (Adjusted to 300 epochs)
-    "reversedistillation"   # Node 0: 100m
-    "dinomaly"              # Node 1: 178m
-    "ganomaly"              # Node 0: 53m
-    "supersimplenet"        # Node 1: 123m
-    "uninet"                # Node 0: 41m  (Early stopping baseline)
-    "dsr"                   # Node 1: 45m  (Adjusted to 100 epochs)
-    "cfa"                   # Node 0: 9m
-    "fre"                   # Node 1: 25m
-    "padim"                 # Node 0: ~10m (na)
+    "uflow"                 # Node 0: 705m
+    "csflow"                # Node 1: 340m
+    "dinomaly"              # Node 0: 199m
+    "cflow"                 # Node 1: 239m
+    "reversedistillation"   # Node 0: 105m
+    "draem"                 # Node 1: 228m
+    "supersimplenet"        # Node 0: 79m
+    "fastflow"              # Node 1: 121m
+    "fre"                   # Node 0: 24m
+    "efficientad"           # Node 1: 104m
+    "dsr"                   # Node 0: 13m
+    "ganomaly"              # Node 1: 40m
+    "dfkde"                 # Node 0: 0m
+    "uninet"                # Node 1: 30m
+    "padim"                 # Node 0: 0m
     "stfpm"                 # Node 1: 20m
-    "dfm"                   # Node 0: ~10m (na)
-    "patchcore"             # Node 1: ~10m (na)
-    "dfkde"                 # Node 0: ~10m (na)
-    "anomalydino"           # Node 1: ~10m (na)
+    "dfm"                   # Node 0: 0m
+    "cfa"                   # Node 1: 9m
+    "patchcore"             # Node 0: 0m
+    "anomalydino"           # Node 1: 0m
 )
 
 MODELS=()
