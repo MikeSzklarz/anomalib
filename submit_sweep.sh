@@ -11,6 +11,8 @@ SMALL_MODELS=(
     "efficientad"           # Node 1: 104m
     "patchcore"             # Node 0: 0m
     "stfpm"                 # Node 1: 20m
+    "l2bt"                  # Node 0: ~0m
+    "patchflow"             # Node 1: ~121m
 )
 
 FULL_MODELS=(
@@ -34,6 +36,9 @@ FULL_MODELS=(
     "cfa"                   # Node 1: 9m
     "patchcore"             # Node 0: 0m
     "anomalydino"           # Node 1: 0m
+    "generalad"             # Node 0: ~160m
+    "l2bt"                  # Node 1: ~0m
+    "patchflow"             # Node 0: ~200m
 )
 
 MODELS=()

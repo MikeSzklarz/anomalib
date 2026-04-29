@@ -43,10 +43,10 @@ from anomalib.data import (
 )
 
 from anomalib.models import (
-    AnomalyDINO, Cfa, Cflow, Csflow, Dfkde, Dfm, 
-    Dinomaly, Draem, Dsr, EfficientAd, Fastflow, 
-    Fre, Ganomaly, Padim, Patchcore, ReverseDistillation, 
-    Stfpm, Supersimplenet, Uflow, UniNet
+    AnomalyDINO, Cfa, Cflow, Csflow, Dfkde, Dfm,
+    Dinomaly, Draem, Dsr, EfficientAd, Fastflow,
+    Fre, Ganomaly, GeneralAD, L2BT, Padim, Patchcore, Patchflow,
+    ReverseDistillation, Stfpm, Supersimplenet, Uflow, UniNet
 )
 
 # -----------------------------------------------------------------------------
@@ -67,8 +67,11 @@ MODEL_MAP: Dict[str, Type] = {
     "fastflow": Fastflow,
     "fre": Fre,
     "ganomaly": Ganomaly,
+    "generalad": GeneralAD,
+    "l2bt": L2BT,
     "padim": Padim,
     "patchcore": Patchcore,
+    "patchflow": Patchflow,
     "reversedistillation": ReverseDistillation,
     "stfpm": Stfpm,
     "supersimplenet": Supersimplenet,
@@ -180,6 +183,11 @@ def log_dataset_details(datamodule, logger, export_paths=False, output_path=None
     check_overlap(files_val, files_test, "VAL", "TEST")
     logger.info("================================")
     
+def _get_batch_field(obj, key):
+    if isinstance(obj, dict):
+        return obj.get(key, None)
+    return getattr(obj, key, None)
+
 class FileLoggingCallback(Callback):
     """Logs metrics to the python logger at the end of every epoch."""
     def __init__(self, logger):
@@ -219,7 +227,7 @@ class RearrangeVisualizationsCallback(Callback):
         if gt is not None and pred_score is not None and paths is not None:
             gt = gt.cpu().squeeze()
             score = pred_score.cpu().squeeze()
-            
+
             if gt.ndim == 0: gt = gt.unsqueeze(0)
             if score.ndim == 0: score = score.unsqueeze(0)
 
@@ -244,7 +252,7 @@ class RearrangeVisualizationsCallback(Callback):
                     selected_thresh = float(thresh.item())
         except Exception as e:
             self.logger.warning(f"[{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
-            
+
         self.logger.info(f" [{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
 
         pred_labels = (all_scores >= selected_thresh).long()
@@ -257,7 +265,7 @@ class RearrangeVisualizationsCallback(Callback):
 
         is_anom_gt = (all_gt == 1)
         is_norm_gt = (all_gt == 0)
-        
+
         tp = torch.logical_and(is_anom_gt, (pred_labels == 1)).sum().item()
         fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
         fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
@@ -278,7 +286,7 @@ class RearrangeVisualizationsCallback(Callback):
             "TP": int(tp), "FN": int(fn), "TN": int(tn), "FP": int(fp),
             "Total_Anomalous": int(tp + fn), "Total_Normal": int(tn + fp)
         }
-        
+
         temp_stats_path = self.output_path / f".tmp_{self.model_name}_custom_stats_{self.subfolder}.json"
         try:
             with open(temp_stats_path, "w") as f:
@@ -295,7 +303,7 @@ class RearrangeVisualizationsCallback(Callback):
             gt_val = all_gt[i].item()
             pred_val = pred_labels[i].item()
             score_val = all_scores[i].item()
-            
+
             if gt_val == 1 and pred_val == 1: sub_cat = "TP"
             elif gt_val == 1 and pred_val == 0: sub_cat = "FN"
             elif gt_val == 0 and pred_val == 1: sub_cat = "FP"
@@ -316,7 +324,7 @@ class RearrangeVisualizationsCallback(Callback):
                 "Threshold": csv_thresholds,
                 "Classification": csv_class
             })
-            
+
             csv_out_path = self.output_path / f"{self.model_name}_{self.subfolder}_predictions.csv"
             df.to_csv(csv_out_path, index=False)
             self.logger.info(f"[{self.subfolder.upper()}] Exported detailed predictions CSV to: {csv_out_path}")
@@ -328,7 +336,7 @@ class RearrangeVisualizationsCallback(Callback):
         sample_file_name = Path(all_paths[0]).name
         found_files = list(base_search_dir.rglob(sample_file_name))
         vis_candidates =[f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
-        
+
         if not vis_candidates:
             vis_candidates =[f for f in found_files if "datasets" not in str(f)]
 
@@ -348,7 +356,7 @@ class RearrangeVisualizationsCallback(Callback):
         for i, original_path in enumerate(all_paths):
             gt_val = all_gt[i].item()
             pred_val = pred_labels[i].item()
-            
+
             main_cat = "anomalous" if gt_val == 1 else "normal"
             if gt_val == 1 and pred_val == 1: sub_cat = "TP"
             elif gt_val == 1 and pred_val == 0: sub_cat = "FN"
@@ -357,18 +365,18 @@ class RearrangeVisualizationsCallback(Callback):
 
             dest_folder = images_root / self.subfolder / main_cat / sub_cat
             fname = Path(original_path).name
-            
+
             potential_paths =[
-                images_root / fname, 
-                images_root / Path(original_path).parent.name / fname 
+                images_root / fname,
+                images_root / Path(original_path).parent.name / fname
             ]
-            
+
             source_file = None
             for p in potential_paths:
                 if p.exists():
                     source_file = p
                     break
-            
+
             if not source_file:
                 found = list(images_root.rglob(fname))
                 candidates =[f for f in found if sub_cat not in str(f.parent) and self.subfolder not in str(f.parent)]
@@ -390,8 +398,8 @@ class RearrangeVisualizationsCallback(Callback):
 
         for item in images_root.iterdir():
             if item.is_dir() and item.name not in["normal", "anomalous", "test", "val", "contamination"]:
-                try: item.rmdir() 
-                except OSError: pass 
+                try: item.rmdir()
+                except OSError: pass
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
         self.preds_stats =[]
@@ -403,16 +411,12 @@ class RawDataExtractionCallback(Callback):
         self.logger = logger or logging.getLogger("train_script")
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        def get_item(obj, key):
-            if isinstance(obj, dict): return obj.get(key, None)
-            return getattr(obj, key, None)
+        anomaly_map = _get_batch_field(outputs, "anomaly_map")
+        if anomaly_map is None: anomaly_map = _get_batch_field(batch, "anomaly_map")
 
-        anomaly_map = get_item(outputs, "anomaly_map")
-        if anomaly_map is None: anomaly_map = get_item(batch, "anomaly_map")
+        pred_mask = _get_batch_field(outputs, "pred_mask")
+        if pred_mask is None: pred_mask = _get_batch_field(batch, "pred_mask")
 
-        pred_mask = get_item(outputs, "pred_mask")
-        if pred_mask is None: pred_mask = get_item(batch, "pred_mask")
-        
         if pred_mask is None and anomaly_map is not None:
             try:
                 if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "pixel_threshold"):
@@ -420,13 +424,13 @@ class RawDataExtractionCallback(Callback):
                     if not torch.isnan(thresh):
                         pred_mask = (anomaly_map >= thresh.item()).to(torch.uint8)
             except Exception:
-                pass 
+                pass
 
-        gt_mask = get_item(outputs, "gt_mask")
-        if gt_mask is None: gt_mask = get_item(batch, "gt_mask")
+        gt_mask = _get_batch_field(outputs, "gt_mask")
+        if gt_mask is None: gt_mask = _get_batch_field(batch, "gt_mask")
 
-        paths = get_item(outputs, "image_path")
-        if paths is None: paths = get_item(batch, "image_path")
+        paths = _get_batch_field(outputs, "image_path")
+        if paths is None: paths = _get_batch_field(batch, "image_path")
 
         raw_out_dir = self.output_path / "raw_outputs" / self.subfolder
         amap_dir = raw_out_dir / "anomaly_maps"
@@ -441,27 +445,11 @@ class RawDataExtractionCallback(Callback):
                 if anomaly_map is not None:
                     amap_dir.mkdir(parents=True, exist_ok=True)
                     amap_np = anomaly_map[i].cpu().numpy()
-                    
-                    is_normalized = (amap_np.min() >= 0.0 and amap_np.max() <= 1.0)
-                    if not is_normalized:
-                        try:
-                            pp = getattr(pl_module, "post_processor", None)
-                            if pp is not None:
-                                p_min = getattr(pp, 'pixel_min', torch.tensor(np.nan)).item()
-                                p_max = getattr(pp, 'pixel_max', torch.tensor(np.nan)).item()
-                                p_thresh = getattr(pp, 'pixel_threshold', torch.tensor(np.nan)).item()
-                                
-                                if not np.isnan(p_min) and not np.isnan(p_max) and not np.isnan(p_thresh) and (p_max - p_min) > 0:
-                                    amap_np = ((amap_np - p_thresh) / (p_max - p_min)) + 0.5
-                                    amap_np = np.clip(amap_np, 0, 1)
-                                else:
-                                    raise ValueError("Missing global stats")
-                            else:
-                                raise ValueError("No post processor")
-                        except Exception:
-                            a_min, a_max = amap_np.min(), amap_np.max()
-                            amap_np = (amap_np - a_min) / (a_max - a_min) if a_max > a_min else amap_np - a_min
-                    
+
+                    if not (amap_np.min() >= 0.0 and amap_np.max() <= 1.0):
+                        a_min, a_max = amap_np.min(), amap_np.max()
+                        amap_np = (amap_np - a_min) / (a_max - a_min) if a_max > a_min else np.zeros_like(amap_np)
+
                     amap_uint8 = (amap_np * 255).astype(np.uint8)
                     heatmap = cv2.applyColorMap(amap_uint8, cv2.COLORMAP_JET)
                     heatmap_rgb = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)

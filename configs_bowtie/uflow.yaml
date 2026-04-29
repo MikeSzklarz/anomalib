@@ -1,2 +1,2 @@
 trainer:
-  min_epochs: 300
+  min_epochs: 200
