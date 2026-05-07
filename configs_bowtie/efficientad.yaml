@@ -1,2 +1,8 @@
+model:
+  class_path: anomalib.models.EfficientAd
+  init_args:
+    padding: true
+    pad_maps: false
+
 trainer:
   min_epochs: 234
