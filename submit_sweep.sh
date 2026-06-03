@@ -39,6 +39,10 @@ FULL_MODELS=(
     "generalad"             # Node 0: ~160m
     "l2bt"                  # Node 1: ~0m
     "patchflow"             # Node 0: ~200m
+    "glass"                 # Node 1: ~100m
+    "inpformer"             # Node 0: ~200m
+    "cfm"                   # Node 1: ~100m
+    "anomalyvfm"            # Node 0: 0m (zero-shot)
 )
 
 MODELS=()
@@ -136,7 +140,7 @@ for model in "${MODELS[@]}"; do
     MODEL_BATCH_SIZE="$GLOBAL_BATCH_SIZE"
 
     # Apply capping logic for memory-intensive models
-    if [[ "$model" == "draem" || "$model" == "uninet" || "$model" == "generalad" ]]; then
+    if [[ "$model" == "draem" || "$model" == "uninet" || "$model" == "generalad" || "$model" == "glass" ]]; then
         if [[ -z "$MODEL_BATCH_SIZE" ]]; then
             # If no batch size was passed, your python script defaults to 32. Cap it at 16.
             MODEL_BATCH_SIZE="16"
