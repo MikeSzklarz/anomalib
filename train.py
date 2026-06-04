@@ -248,16 +248,31 @@ class RearrangeVisualizationsCallback(Callback):
         all_paths =[]
         for x in self.preds_stats: all_paths.extend(x[2])
 
-        selected_thresh = 0.5
+        # IMPORTANT: pred_score captured in on_test_batch_end is RAW (model-native scale).
+        # Reason: PostProcessor is a model callback and is appended AFTER trainer callbacks
+        # in the Lightning callback chain, so it normalizes AFTER we collect scores here.
+        # We must compare raw scores against the raw F1-optimal threshold stored in the model.
+        selected_thresh = float("nan")
         try:
-            if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "image_threshold"):
-                thresh = pl_module.post_processor.image_threshold
-                if not torch.isnan(thresh):
-                    selected_thresh = float(thresh.item())
+            if hasattr(pl_module, "post_processor"):
+                pp = pl_module.post_processor
+                thresh_tensor = pp.image_threshold  # raw F1-optimal threshold
+                if not thresh_tensor.isnan():
+                    selected_thresh = float(thresh_tensor.item())
         except Exception as e:
-            self.logger.warning(f"[{self.subfolder.upper()}] Error extracting threshold: {e}. Using default 0.5")
+            self.logger.warning(f"[{self.subfolder.upper()}] Error extracting raw threshold: {e}.")
 
-        self.logger.info(f" [{self.subfolder.upper()}] Using model's internal adaptive threshold: {selected_thresh:.4f}")
+        if selected_thresh != selected_thresh:  # isnan check without import
+            selected_thresh = 0.5
+            self.logger.warning(
+                f"[{self.subfolder.upper()}] Raw threshold is NaN (no anomalous val samples?). "
+                f"Falling back to 0.5 — classifications may be incorrect."
+            )
+
+        self.logger.info(
+            f" [{self.subfolder.upper()}] Using raw F1-adaptive threshold: {selected_thresh:.6f} "
+            f"(model-native score scale)"
+        )
 
         pred_labels = (all_scores >= selected_thresh).long()
 
@@ -423,10 +438,15 @@ class RawDataExtractionCallback(Callback):
 
         if pred_mask is None and anomaly_map is not None:
             try:
-                if hasattr(pl_module, "post_processor") and hasattr(pl_module.post_processor, "pixel_threshold"):
-                    thresh = pl_module.post_processor.pixel_threshold
-                    if not torch.isnan(thresh):
-                        pred_mask = (anomaly_map >= thresh.item()).to(torch.uint8)
+                # anomaly_map is RAW (model-native scale) here — PostProcessor has not yet run.
+                # Use the raw F1-optimal pixel threshold, which is on the same scale.
+                thresh = None
+                if hasattr(pl_module, "post_processor"):
+                    t = pl_module.post_processor.pixel_threshold
+                    if not t.isnan():
+                        thresh = t.item()
+                if thresh is not None:
+                    pred_mask = (anomaly_map >= thresh).to(torch.uint8)
             except Exception:
                 pass
 
@@ -446,9 +466,17 @@ class RawDataExtractionCallback(Callback):
                 path_obj = Path(str(path))
                 save_name = f"{path_obj.parent.name}_{path_obj.stem}.png"
 
+                # Get original image dimensions for upscaling back to source resolution
+                orig_w, orig_h = None, None
+                try:
+                    with Image.open(path_obj) as orig_img:
+                        orig_w, orig_h = orig_img.size  # PIL returns (width, height)
+                except Exception:
+                    pass
+
                 if anomaly_map is not None:
                     amap_dir.mkdir(parents=True, exist_ok=True)
-                    amap_np = anomaly_map[i].cpu().numpy()
+                    amap_np = anomaly_map[i].cpu().numpy().squeeze()  # [H, W]
 
                     if not (amap_np.min() >= 0.0 and amap_np.max() <= 1.0):
                         a_min, a_max = amap_np.min(), amap_np.max()
@@ -457,17 +485,26 @@ class RawDataExtractionCallback(Callback):
                     amap_uint8 = (amap_np * 255).astype(np.uint8)
                     heatmap = cv2.applyColorMap(amap_uint8, cv2.COLORMAP_JET)
                     heatmap_rgb = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-                    Image.fromarray(heatmap_rgb).save(amap_dir / save_name)
-                    
+                    heatmap_img = Image.fromarray(heatmap_rgb)
+                    if orig_w and orig_h:
+                        heatmap_img = heatmap_img.resize((orig_w, orig_h), Image.BILINEAR)
+                    heatmap_img.save(amap_dir / save_name)
+
                 if pred_mask is not None:
                     pmask_dir.mkdir(parents=True, exist_ok=True)
-                    mask_arr = (pred_mask[i].cpu().numpy() * 255).astype(np.uint8)
-                    Image.fromarray(mask_arr, mode='L').save(pmask_dir / save_name)
-                    
+                    mask_arr = (pred_mask[i].cpu().numpy().squeeze() * 255).astype(np.uint8)
+                    mask_img = Image.fromarray(mask_arr, mode='L')
+                    if orig_w and orig_h:
+                        mask_img = mask_img.resize((orig_w, orig_h), Image.NEAREST)
+                    mask_img.save(pmask_dir / save_name)
+
                 if gt_mask is not None:
                     gmask_dir.mkdir(parents=True, exist_ok=True)
-                    mask_arr = (gt_mask[i].cpu().numpy() * 255).astype(np.uint8)
-                    Image.fromarray(mask_arr, mode='L').save(gmask_dir / save_name)
+                    mask_arr = (gt_mask[i].cpu().numpy().squeeze() * 255).astype(np.uint8)
+                    gt_img = Image.fromarray(mask_arr, mode='L')
+                    if orig_w and orig_h:
+                        gt_img = gt_img.resize((orig_w, orig_h), Image.NEAREST)
+                    gt_img.save(gmask_dir / save_name)
 
 # -----------------------------------------------------------------------------
 # 3. Helpers

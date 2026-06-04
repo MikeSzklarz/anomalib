@@ -1,7 +1,7 @@
 model:
   class_path: anomalib.models.EfficientAd
   init_args:
-    padding: true
+    padding: false
     pad_maps: false
 
 trainer:
