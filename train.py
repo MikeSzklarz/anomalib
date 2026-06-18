@@ -554,7 +554,11 @@ def main():
     parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"])
     parser.add_argument("--no_checkpoint", action="store_true")
     parser.add_argument("--image_size", type=int, nargs="+", default=None)
-    parser.add_argument("--grayscale", action="store_true")
+    parser.add_argument("--color_preprocessing", type=str, default="none",
+                        choices=["none", "reinhard_neutral", "reinhard_cool", "clahe",
+                                 "reinhard_clahe", "desaturate", "grayscale_3ch",
+                                 "viridis", "composite"],
+                        help="Inline color preprocessing applied before ImageNet normalization.")
     parser.add_argument("--export_paths", action="store_true")
     parser.add_argument("--check_contamination", action="store_true")
     parser.add_argument("--eval_val_test", action="store_true", 
@@ -657,6 +661,10 @@ def main():
             if (root_p / "test").exists(): dataset_kwargs["abnormal_dir"] = "test"
             elif (root_p / "defect").exists(): dataset_kwargs["abnormal_dir"] = "defect"
 
+        if args.task == "segmentation" and "mask_dir" not in dataset_kwargs:
+            if (root_p / "ground_truth").exists():
+                dataset_kwargs["mask_dir"] = "ground_truth"
+
     filtered_kwargs = {k: v for k, v in dataset_kwargs.items() if k in valid_args}
 
     try:
@@ -729,7 +737,8 @@ def main():
     ModelClass = MODEL_MAP[args.model]
     model_kwargs = get_init_args(yaml_config, "model")
     
-    if args.image_size or args.grayscale:
+    _use_color_prep = args.color_preprocessing and args.color_preprocessing != "none"
+    if args.image_size or _use_color_prep:
         try:
             if args.image_size:
                 img_size = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
@@ -737,11 +746,15 @@ def main():
             else:
                 pre_processor = ModelClass.configure_pre_processor()
 
-            if args.grayscale:
-                pre_processor.transform = v2.Compose([v2.Grayscale(num_output_channels=3), pre_processor.transform])
+            if _use_color_prep:
+                from preprocessing import get_color_transform
+                color_transform = get_color_transform(args.color_preprocessing)
+                if color_transform is not None:
+                    pre_processor.transform = v2.Compose([color_transform, pre_processor.transform])
+                    logger.info(f"Color preprocessing: {color_transform}")
             model_kwargs["pre_processor"] = pre_processor
         except Exception as e:
-            logger.warning("Falling back to default model initialization.")
+            logger.warning(f"Falling back to default model initialization: {e}")
 
     if args.task == "classification":
         val_metrics =[AUROC(fields=["pred_score", "gt_label"], prefix="image_"), F1Max(fields=["pred_score", "gt_label"], prefix="image_"), AUPR(fields=["pred_score", "gt_label"], prefix="image_")]

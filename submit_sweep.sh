@@ -77,6 +77,13 @@ while [[ $# -gt 0 ]]; do
       MODELS+=("$2")
       shift 2
       ;;
+    --models)
+      shift
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        MODELS+=("$1")
+        shift
+      done
+      ;;
     --dataset)
       DATASET="$2"
       TRAIN_ARGS+=("$1" "$2")
