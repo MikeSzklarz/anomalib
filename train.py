@@ -364,10 +364,16 @@ class RearrangeVisualizationsCallback(Callback):
             return
 
         sample_path = vis_candidates[0]
-        if sample_path.parent.name == "images":
-            images_root = sample_path.parent
-        else:
-            images_root = sample_path.parent.parent
+        images_root = None
+        for parent in sample_path.parents:
+            if parent.name == "images":
+                images_root = parent
+                break
+        if images_root is None:
+            if sample_path.parent.name == "images":
+                images_root = sample_path.parent
+            else:
+                images_root = sample_path.parent.parent
 
         moved_count = 0
         ops =[]
@@ -387,7 +393,8 @@ class RearrangeVisualizationsCallback(Callback):
 
             potential_paths =[
                 images_root / fname,
-                images_root / Path(original_path).parent.name / fname
+                images_root / Path(original_path).parent.name / fname,
+                images_root / Path(original_path).parent.parent.name / Path(original_path).parent.name / fname,
             ]
 
             source_file = None
@@ -398,7 +405,7 @@ class RearrangeVisualizationsCallback(Callback):
 
             if not source_file:
                 found = list(images_root.rglob(fname))
-                candidates =[f for f in found if sub_cat not in str(f.parent) and self.subfolder not in str(f.parent)]
+                candidates =[f for f in found if f.parent.name not in {"TP", "FN", "FP", "TN"}]
                 if candidates:
                     source_file = candidates[0]
 
@@ -415,10 +422,27 @@ class RearrangeVisualizationsCallback(Callback):
             except Exception as e:
                 pass
 
+        def _remove_empty_dirs(path: Path) -> None:
+            for child in path.iterdir():
+                if child.is_dir():
+                    _remove_empty_dirs(child)
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+
+        split_dirs = {"test", "val", "contamination"}
+        label_dirs = {"normal", "anomalous"}
+
         for item in images_root.iterdir():
-            if item.is_dir() and item.name not in["normal", "anomalous", "test", "val", "contamination"]:
-                try: item.rmdir()
-                except OSError: pass
+            if not item.is_dir():
+                continue
+            if item.name in split_dirs:
+                for sub in item.iterdir():
+                    if sub.is_dir() and sub.name not in label_dirs:
+                        _remove_empty_dirs(sub)
+            elif item.name not in label_dirs:
+                _remove_empty_dirs(item)
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
         self.preds_stats =[]
