@@ -276,12 +276,6 @@ class RearrangeVisualizationsCallback(Callback):
 
         pred_labels = (all_scores >= selected_thresh).long()
 
-        target_f1 = 0.0
-        if "image_F1Max" in trainer.callback_metrics:
-            target_f1 = trainer.callback_metrics["image_F1Max"].item()
-        elif "F1Score" in trainer.callback_metrics:
-            target_f1 = trainer.callback_metrics["F1Score"].item()
-
         is_anom_gt = (all_gt == 1)
         is_norm_gt = (all_gt == 0)
 
@@ -289,6 +283,9 @@ class RearrangeVisualizationsCallback(Callback):
         fn = torch.logical_and(is_anom_gt, (pred_labels == 0)).sum().item()
         fp = torch.logical_and(is_norm_gt, (pred_labels == 1)).sum().item()
         tn = torch.logical_and(is_norm_gt, (pred_labels == 0)).sum().item()
+
+        f1_denom = 2 * tp + fp + fn
+        target_f1 = (2 * tp / f1_denom) if f1_denom > 0 else 0.0
 
         stats_msg = (
             f"\n FINAL CLASSIFICATION STATS ({self.subfolder.upper()}) \n"
