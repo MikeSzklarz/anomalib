@@ -45,8 +45,22 @@ FULL_MODELS=(
     "anomalyvfm"            # Node 0: 0m (zero-shot)
 )
 
+TOP_MODELS=(
+    "anomalyvfm"
+    "inpformer"
+    "dinomaly"
+    "reversedistillation"
+    "cfa"
+    "efficientad"
+    "patchflow"
+    "glass"
+    "l2bt"
+    "generalad"
+    "uflow"
+)
+
 MODELS=()
-ZOO_SELECTION="small" 
+ZOO_SELECTION="small"
 
 PARTITION="waccamaw"
 NODELIST=""
@@ -58,11 +72,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     # --- ZOO SELECTION ---
     --zoo)
-      if [[ "$2" == "full" ]]; then
-        ZOO_SELECTION="full"
-      else
-        ZOO_SELECTION="small"
-      fi
+      case "$2" in
+        full) ZOO_SELECTION="full" ;;
+        top) ZOO_SELECTION="top" ;;
+        *) ZOO_SELECTION="small" ;;
+      esac
       shift 2
       ;;
     --nodelist)
@@ -105,6 +119,9 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     if [ "$ZOO_SELECTION" == "full" ]; then
         echo "Using FULL model zoo."
         MODELS=("${FULL_MODELS[@]}")
+    elif [ "$ZOO_SELECTION" == "top" ]; then
+        echo "Using TOP model zoo."
+        MODELS=("${TOP_MODELS[@]}")
     else
         echo "Using SMALL model zoo."
         MODELS=("${SMALL_MODELS[@]}")
