@@ -12,6 +12,7 @@ tmp*
 # Jupyter Notebooks
 examples/notebooks/500_use_cases/501_dobot/
 !examples/notebooks/500_use_cases/501_dobot/*.ipynb
+notebooks/
 
 # VENV
 .python-version
@@ -180,3 +181,23 @@ mlruns
 # application data
 application/**/data/
 application/**/logs/
+
+
+exclude_bowtie/
+threshold_research/
+tools/experimental/ssr
+src/anomalib/pipelines/ssr
+models
+research
+ANOMALY_DETECTION_MODELS.md
+INFERENCE_GUI.md
+inference_gui.py
+requirements-gui.txt
+TRAINING.md
+
+
+
+
+
+
+
