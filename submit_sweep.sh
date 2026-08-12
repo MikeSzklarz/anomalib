@@ -16,33 +16,41 @@ SMALL_MODELS=(
 )
 
 FULL_MODELS=(
-    "uflow"                 # Node 0: 705m
-    "csflow"                # Node 1: 340m
-    "dinomaly"              # Node 0: 199m
-    "cflow"                 # Node 1: 239m
-    "reversedistillation"   # Node 0: 105m
-    "draem"                 # Node 1: 228m
-    "supersimplenet"        # Node 0: 79m
-    "fastflow"              # Node 1: 121m
-    "fre"                   # Node 0: 24m
-    "efficientad"           # Node 1: 104m
-    "dsr"                   # Node 0: 13m
-    "ganomaly"              # Node 1: 40m
-    "dfkde"                 # Node 0: 0m
-    "uninet"                # Node 1: 30m
-    "padim"                 # Node 0: 0m
-    "stfpm"                 # Node 1: 20m
-    "dfm"                   # Node 0: 0m
-    "cfa"                   # Node 1: 9m
-    "patchcore"             # Node 0: 0m
-    "anomalydino"           # Node 1: 0m
-    "generalad"             # Node 0: ~160m
-    "l2bt"                  # Node 1: ~0m
-    "patchflow"             # Node 0: ~200m
-    "glass"                 # Node 1: ~100m
-    "inpformer"             # Node 0: ~200m
-    "cfm"                   # Node 1: ~100m
-    "anomalyvfm"            # Node 0: 0m (zero-shot)
+    # --- Priority: strong + fast, run these first ---
+    "efficientad"
+    "dinomaly"
+    "inpformer"
+    "l2bt"
+    "reversedistillation"
+    "fastflow"
+    "glass"
+    # --- Fast: zero-shot / patch-based / memory-bank methods, minimal training time ---
+    "anomalyvfm"
+    "superadd"
+    "patchcore"
+    "padim"
+    "patchflow"
+    "anomalydino"
+    "cfa"
+    # --- Known slow ---
+    "uflow"
+    # --- Moderate performers ---
+    "cflow"
+    # --- Historically weak performers (deprioritized, not excluded) ---
+    "stfpm"
+    "supersimplenet"
+    "dfkde"
+    "uninet"
+    "dsr"
+    # --- Unreliable/broken last run - needs debugging before results are meaningful ---
+    "draem"                 # NaN issue suspected - inflated AUROC, don't trust until fixed
+    "ganomaly"
+    "csflow"
+    "fre"
+    "dfm"
+    "generalad"             # AUROC below random last run - likely a score-direction bug
+    # --- No historical data on this dataset ---
+    "cfm"
 )
 
 TOP_MODELS=(

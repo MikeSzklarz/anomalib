@@ -36,17 +36,19 @@ from anomalib.data.utils.split import ValSplitMode, TestSplitMode
 from anomalib.visualization.image.item_visualizer import DEFAULT_TEXT_CONFIG
 DEFAULT_TEXT_CONFIG["enable"] = False
 
+from image_size_rules import resolve_from_ratio, validate_image_size, MODEL_IMAGE_SIZE_RULES
+
 from anomalib.data import (
-    MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D, 
-    BTech, Visa, Folder, Kolektor, 
-    Avenue, ShanghaiTech, UCSDped
+    MVTecAD, MVTecLOCO, MVTecAD2, MVTec3D,
+    BTech, Visa, Folder, Kolektor,
+    Avenue, ShanghaiTech, UCSDped, AutoVI, Kaputt
 )
 
 from anomalib.models import (
     AnomalyDINO, AnomalyVFM, CFM, Cfa, Cflow, Csflow, Dfkde, Dfm,
     Dinomaly, Draem, Dsr, EfficientAd, Fastflow,
     Fre, Ganomaly, GeneralAD, Glass, InpFormer, L2BT, Padim, Patchcore, Patchflow,
-    ReverseDistillation, Stfpm, Supersimplenet, Uflow, UniNet
+    ReverseDistillation, Stfpm, SuperADD, Supersimplenet, Uflow, UniNet
 )
 
 # -----------------------------------------------------------------------------
@@ -78,6 +80,7 @@ MODEL_MAP: Dict[str, Type] = {
     "patchflow": Patchflow,
     "reversedistillation": ReverseDistillation,
     "stfpm": Stfpm,
+    "superadd": SuperADD,
     "supersimplenet": Supersimplenet,
     "uflow": Uflow,
     "uninet": UniNet
@@ -94,7 +97,9 @@ DATASET_MAP: Dict[str, Type] = {
     "folder": Folder,
     "avenue": Avenue,
     "shanghaitech": ShanghaiTech,
-    "ucsdped": UCSDped
+    "ucsdped": UCSDped,
+    "autovi": AutoVI,
+    "kaputt": Kaputt
 }
 
 # -----------------------------------------------------------------------------
@@ -111,6 +116,83 @@ def setup_logger(output_dir: Path, model_name: str):
         force=True
     )
     return logging.getLogger("train_script")
+
+def _get_resize_target(pre_processor) -> tuple[int, int] | None:
+    """Extract the (height, width) a PreProcessor's Resize transform will produce, if any."""
+    transform = getattr(pre_processor, "transform", None)
+    if transform is None:
+        return None
+    for t in getattr(transform, "transforms", [transform]):
+        size = getattr(t, "size", None)
+        if size is not None and len(size) == 2:
+            return int(size[0]), int(size[1])
+    return None
+
+
+def log_image_size_analysis(datamodule, logger, model_name: str, target_h: int, target_w: int, sample_count: int = 5):
+    """Compares the resolved image_size against the dataset's real native resolution.
+
+    Flags axes that will be upsampled (no extra real detail gained beyond native resolution)
+    and, for square targets, the aspect-ratio skew a non-square source will suffer - which is
+    constant across every image_size choice for a given dataset, not something a bigger or
+    smaller target fixes.
+    """
+    train_data = getattr(datamodule, "train_data", None)
+    if not train_data or not hasattr(train_data, "samples") or len(train_data.samples) == 0:
+        logger.warning("[image_size] Skipping native-resolution check: no train samples found.")
+        return
+
+    native_sizes = []
+    for image_path in train_data.samples["image_path"].tolist()[:sample_count]:
+        try:
+            with Image.open(image_path) as im:
+                native_sizes.append(im.size)  # PIL gives (W, H)
+        except Exception:
+            continue
+
+    if not native_sizes:
+        logger.warning("[image_size] Skipping native-resolution check: could not read sample images.")
+        return
+
+    widths = [s[0] for s in native_sizes]
+    heights = [s[1] for s in native_sizes]
+    native_w, native_h = widths[0], heights[0]
+    variability_note = ""
+    if len(set(widths)) > 1 or len(set(heights)) > 1:
+        variability_note = (
+            f" [sampled {len(native_sizes)} images, sizes vary: width {min(widths)}-{max(widths)}, "
+            f"height {min(heights)}-{max(heights)}; using first sample as reference]"
+        )
+
+    scale_w = target_w / native_w
+    scale_h = target_h / native_h
+
+    def axis_desc(name: str, native: int, target: int, scale: float) -> str:
+        direction = "UPSAMPLED, no extra real detail beyond native" if scale > 1.0 else "downsampled"
+        return f"{name} {native}->{target} ({scale:.2f}x, {direction})"
+
+    logger.info(
+        f"[image_size] Native-resolution check for '{model_name}': native={native_w}x{native_h}{variability_note}, "
+        f"target={target_w}x{target_h}. {axis_desc('width', native_w, target_w, scale_w)}; "
+        f"{axis_desc('height', native_h, target_h, scale_h)}."
+    )
+
+    if scale_w > 1.0 and scale_h > 1.0:
+        logger.warning(
+            "[image_size] Both axes exceed native resolution - this target adds no additional real detail "
+            "over a smaller one, only interpolation and extra compute."
+        )
+
+    if target_w == target_h and min(scale_w, scale_h) > 0:
+        skew = max(scale_w, scale_h) / min(scale_w, scale_h)
+        if skew > 1.15:
+            logger.warning(
+                f"[image_size] Non-square source ({native_w}x{native_h}) forced into a square resize distorts "
+                f"object geometry by ~{skew:.2f}x (width and height scaled by different factors). This skew is "
+                f"constant across every image_size choice for this dataset - it's a property of the native "
+                f"aspect ratio vs. the forced square resize, not something image_size affects."
+            )
+
 
 def log_dataset_details(datamodule, logger, export_paths=False, output_path=None):
     """Logs detailed stats and checks for TRUE data leakage using full paths."""
@@ -561,11 +643,26 @@ def main():
     parser.add_argument("--category", type=str, default="")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--exclude_root", type=str, default=None, help="Directory containing CSV/TXT files of images to exclude per model.")
-    
+    parser.add_argument("--val_split_mode", type=str, default=None,
+                        choices=["none", "same_as_test", "from_train", "from_test", "synthetic", "from_dir"],
+                        help="Override how the validation set is derived (default: whatever the dataset class "
+                             "itself defaults to - often 'same_as_test', meaning validation reuses the test set "
+                             "verbatim). Use 'from_test' for a genuinely held-out val/test split.")
+    parser.add_argument("--val_split_ratio", type=float, default=None,
+                        help="Fraction of data used for validation when --val_split_mode is from_train/from_test/"
+                             "synthetic. Ignored by other modes.")
+    parser.add_argument("--test_split_mode", type=str, default=None,
+                        choices=["none", "from_dir", "synthetic"],
+                        help="Override how the test set is derived (default: whatever the dataset class itself "
+                             "defaults to).")
+    parser.add_argument("--test_split_ratio", type=float, default=None,
+                        help="Fraction of normal training data pulled into the test set when the test directory "
+                             "has no normal images of its own. Ignored otherwise.")
+
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
     parser.add_argument("--min_epochs", type=int, default=15)
-    parser.add_argument("--patience", type=int, default=25)
+    parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
@@ -575,6 +672,12 @@ def main():
     parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"])
     parser.add_argument("--no_checkpoint", action="store_true")
     parser.add_argument("--image_size", type=int, nargs="+", default=None)
+    parser.add_argument("--image_size_ratio", type=float, default=None,
+                        help="Scale this model's own baseline default image_size by this ratio "
+                             "(e.g. 1.2). Resolved per-model against known architecture constraints; "
+                             "if the resolved size would equal the baseline (architecturally frozen "
+                             "model, or ratio too small to move the snapped size), the run is skipped. "
+                             "Mutually exclusive with --image_size.")
     parser.add_argument("--color_preprocessing", type=str, default="none",
                         choices=["none", "reinhard_neutral", "reinhard_cool", "clahe",
                                  "reinhard_clahe", "desaturate", "grayscale_3ch",
@@ -586,13 +689,51 @@ def main():
                         help="Run a secondary test pass over the Validation set and merge the CSV outputs.")
 
     args = parser.parse_args()
-    
+
+    if args.image_size and args.image_size_ratio is not None:
+        parser.error("--image_size and --image_size_ratio are mutually exclusive.")
+
     if args.seed is not None:
         seed_everything(args.seed, workers=True)
-    
+
+    resolved_image_size = None
+    if args.image_size_ratio is not None:
+        resolved_image_size, baseline_size, skip_run, size_explanation = resolve_from_ratio(
+            args.model, args.image_size_ratio,
+        )
+
     output_path = Path(args.output_dir) / args.model / args.dataset / args.category
+    if resolved_image_size is not None:
+        output_path = output_path / f"imgsize_{resolved_image_size}"
     logger = setup_logger(output_path, args.model)
     logger.info(f"Experiment Args: {vars(args)}")
+
+    target_h = target_w = None
+    if args.image_size_ratio is not None:
+        logger.info(f"[image_size_ratio] {size_explanation}")
+        if skip_run:
+            logger.info(
+                f"[image_size_ratio] Skipping run: '{args.model}' has no valid image_size at "
+                f"ratio={args.image_size_ratio} distinct from its baseline default ({baseline_size})."
+            )
+            sys.exit(0)
+        target_h = target_w = resolved_image_size
+    elif args.image_size:
+        baseline_size = MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default", "unknown")
+        logger.info(f"[image_size] Explicit override: {args.image_size} (model baseline default: {baseline_size})")
+        target_h, target_w = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
+        size_warning = validate_image_size(args.model, target_h, target_w)
+        if size_warning:
+            logger.warning(f"[image_size] {size_warning}")
+    else:
+        baseline_size = MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default", "unknown")
+        logger.info(f"[image_size] Using model baseline default: {baseline_size}")
+        try:
+            resize_target = _get_resize_target(MODEL_MAP[args.model].configure_pre_processor())
+            if resize_target:
+                target_h, target_w = resize_target
+        except Exception as e:
+            logger.warning(f"[image_size] Could not determine baseline resize target for native-resolution check: {e}")
 
     config_path = args.config
     if config_path is None:
@@ -664,7 +805,26 @@ def main():
             
     if args.dataset == "kolektor":
         dataset_kwargs["val_split_mode"] = "from_test"
-        dataset_kwargs["val_split_ratio"] = 0.5 
+        dataset_kwargs["val_split_ratio"] = 0.5
+
+    # Explicit CLI overrides win over the dataset-specific default above and anything in the yaml config.
+    split_overrides = {
+        "val_split_mode": args.val_split_mode,
+        "val_split_ratio": args.val_split_ratio,
+        "test_split_mode": args.test_split_mode,
+        "test_split_ratio": args.test_split_ratio,
+    }
+    for key, value in split_overrides.items():
+        if value is None:
+            continue
+        if key not in valid_args:
+            logger.warning(
+                f"[split] --{key.replace('_', '-')} was set to '{value}' but '{args.dataset}' does not accept "
+                f"this parameter - it will have no effect."
+            )
+            continue
+        dataset_kwargs[key] = value
+        logger.info(f"[split] Overriding {key} = {value}")
 
     if args.dataset == "Folder":
         dataset_kwargs["name"] = args.category
@@ -687,6 +847,15 @@ def main():
                 dataset_kwargs["mask_dir"] = "ground_truth"
 
     filtered_kwargs = {k: v for k, v in dataset_kwargs.items() if k in valid_args}
+
+    for key in ("test_split_mode", "test_split_ratio", "val_split_mode", "val_split_ratio"):
+        if key in filtered_kwargs:
+            source = "CLI override" if split_overrides.get(key) is not None else "train.py dataset-specific default / yaml config"
+            logger.info(f"[split] {key} = {filtered_kwargs[key]} ({source})")
+        elif key in valid_args:
+            logger.info(f"[split] {key} = {valid_args[key].default} ('{args.dataset}' class default)")
+        else:
+            logger.info(f"[split] {key} = N/A (not supported by '{args.dataset}')")
 
     try:
         datamodule = DataClass(**filtered_kwargs)
@@ -750,7 +919,11 @@ def main():
     except Exception as e:
         logger.error(f"DataModule Error: {e}")
         sys.exit(1)
-        
+
+    if target_h and target_w:
+        log_image_size_analysis(datamodule, logger, args.model, target_h, target_w)
+
+
     # -------------------------------------------------------------------------
     # Model
     # -------------------------------------------------------------------------
@@ -759,9 +932,12 @@ def main():
     model_kwargs = get_init_args(yaml_config, "model")
     
     _use_color_prep = args.color_preprocessing and args.color_preprocessing != "none"
-    if args.image_size or _use_color_prep:
+    if resolved_image_size or args.image_size or _use_color_prep:
         try:
-            if args.image_size:
+            if resolved_image_size:
+                img_size = (resolved_image_size, resolved_image_size)
+                pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
+            elif args.image_size:
                 img_size = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
                 pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
             else:
