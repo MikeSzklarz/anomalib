@@ -11,10 +11,10 @@
 [Notebooks](examples/notebooks) •
 [License](LICENSE)
 
-[![python](https://img.shields.io/badge/python-3.10%2B-green)]()
-[![pytorch](https://img.shields.io/badge/pytorch-2.6%2B-orange)]()
-[![lightning](https://img.shields.io/badge/lightning-2.2%2B-blue)]()
-[![openvino](https://img.shields.io/badge/openvino-2024.0%2B-purple)]()
+![python](https://img.shields.io/badge/python-3.10%2B-green)
+![pytorch](https://img.shields.io/badge/pytorch-2.6%2B-orange)
+![lightning](https://img.shields.io/badge/lightning-2.2%2B-blue)
+![openvino](https://img.shields.io/badge/openvino-2024.0%2B-purple)
 
 [![Pre-Merge Checks](https://github.com/open-edge-platform/anomalib/actions/workflows/pre_merge.yml/badge.svg)](https://github.com/open-edge-platform/anomalib/actions/workflows/pre_merge.yml)
 [![codecov](https://codecov.io/gh/open-edge-platform/anomalib/branch/main/graph/badge.svg?token=Z6A07N1BZK)](https://codecov.io/gh/open-edge-platform/anomalib)
@@ -31,16 +31,15 @@
 
 ---
 
-> 🌟 **Announcing v2.5.0 Release!** 🌟
+> 🌟 **Announcing v2.6.0 Release!** 🌟
 >
-> This release introduces four new anomaly detection models!
+> This release adds the SuperADD model and AutoVI dataset, and removes APIs that were deprecated through v2.5.x.
 >
 > Key Changes
 >
-> - **INP-Former**: Intrinsic Normal Prototypes for universal anomaly detection.
-> - **GLASS**: A unified anomaly synthesis strategy with gradient ascent for industrial anomaly detection and localization.
-> - **AnomalyVFM**: Zero-shot anomaly detection with Vision Foundation Models.
-> - **CFM**: Cross-modal Feature Mapping for 3D anomaly detection.
+> - **SuperADD**: Training-free class-agnostic anomaly segmentation (CVPR 2026 VAND 4.0 Industrial Track winner) using DINOv3 multi-layer memory banks.
+> - **AutoVI dataset**: Automotive Visual Inspection benchmark with six categories and automatic Zenodo download support.
+> - **Breaking API cleanup**: Removed Kaputt legacy flags (`use_reference` / `reference_only` / `category='all'`), AUPRO `num_thresholds` / `compute_pro(target=...)`, and the temporary `resolve_with_warning` dataset-path helper.
 >
 > We value your input! Please share feedback via [GitHub Issues](https://github.com/open-edge-platform/anomalib/issues) or our [Discussions](https://github.com/open-edge-platform/anomalib/discussions)
 
@@ -94,9 +93,6 @@ uv pip install "anomalib[cu126]"
 
 # CUDA 13.0 support (Linux/Windows with NVIDIA GPU)
 uv pip install "anomalib[cu130]"
-
-# CUDA 11.8 support (Linux/Windows with NVIDIA GPU)
-uv pip install "anomalib[cu118]"
 
 # ROCm support (Linux with AMD GPU)
 uv pip install "anomalib[rocm]"
@@ -316,6 +312,9 @@ anomalib benchmark --config tools/experimental/benchmarking/sample.yaml
 > - [Other Models](src/anomalib/models/)
 
 # Anomalib Studio
+
+> [!IMPORTANT]
+> Anomalib Studio is currently under active development and should be considered a pre-release. Features may change, and some functionality may be incomplete or unstable. We welcome feedback and contributions as we work towards a stable release.
 
 Anomalib Studio is a low/no-code web application that allows users to train and deploy anomaly detection models. It enables users to leverage Anomalib's features in their operational environment. Users can connect USB and IP cameras, or use a folder of images, as input to the training pipeline. The tool allows direct output to their industrial pipelines through ROS messages, MQTT, etc.
 

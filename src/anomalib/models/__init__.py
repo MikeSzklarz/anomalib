@@ -43,6 +43,7 @@ Image Models:
     - Reverse Distillation (:class:`anomalib.models.image.ReverseDistillation`)
     - STFPM (:class:`anomalib.models.image.Stfpm`)
     - SuperSimpleNet (:class:`anomalib.models.image.Supersimplenet`)
+    - SuperADD (:class:`anomalib.models.image.SuperADD`)
     - UFlow (:class:`anomalib.models.image.Uflow`)
     - UniNet (:class:`anomalib.models.image.UniNet`)
     - VLM-AD (:class:`anomalib.models.image.VlmAd`)
@@ -59,6 +60,7 @@ from importlib import import_module
 from jsonargparse import Namespace
 from omegaconf import DictConfig, OmegaConf
 
+from anomalib.models import _legacy_compat  # noqa: F401  # registers legacy checkpoint import aliases
 from anomalib.models.components import AnomalibModule
 from anomalib.utils.path import convert_snake_to_pascal_case, convert_to_snake_case, convert_to_title_case
 
@@ -87,6 +89,7 @@ from .image import (
     Patchflow,
     ReverseDistillation,
     Stfpm,
+    SuperADD,
     Supersimplenet,
     Uflow,
     UniNet,
@@ -135,6 +138,7 @@ __all__ = [
     "Patchflow",
     "ReverseDistillation",
     "Stfpm",
+    "SuperADD",
     "Supersimplenet",
     "Uflow",
     "UniNet",
