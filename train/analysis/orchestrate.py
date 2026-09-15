@@ -143,6 +143,7 @@ def generate_run_level_analysis(
     figures_dir: Path,
     split_counts: dict[str, dict[str, int]],
     epoch_df: pd.DataFrame | None,
+    resource_df: pd.DataFrame | None = None,
 ) -> None:
     """Charts that exist once per run, not once per split."""
     try:
@@ -155,6 +156,11 @@ def generate_run_level_analysis(
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[analysis] Skipping epoch progression chart: {exc}")
 
+    try:
+        charts.chart_resource_usage(resource_df if resource_df is not None else pd.DataFrame(), figures_dir / "resource_usage.png")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[analysis] Skipping resource usage chart: {exc}")
+
 
 def run_post_test_analysis(
     output_path: Path,
@@ -163,6 +169,7 @@ def run_post_test_analysis(
     per_image_stats_by_split: dict[str, pd.DataFrame],
     split_counts: dict[str, dict[str, int]],
     epoch_df: pd.DataFrame | None,
+    resource_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Top-level entry point called from train.pipeline after all test passes finish.
 
@@ -185,7 +192,7 @@ def run_post_test_analysis(
             per_image_stats_by_split.get(split),
         )
 
-    generate_run_level_analysis(analysis_dir, figures_dir, split_counts, epoch_df)
+    generate_run_level_analysis(analysis_dir, figures_dir, split_counts, epoch_df, resource_df)
 
     _write_json(summaries, analysis_dir / "summary.json")
     return summaries

@@ -308,6 +308,48 @@ def chart_epoch_progression(epoch_df: pd.DataFrame, path: Path) -> None:
     save(fig, path)
 
 
+def chart_resource_usage(resource_df: pd.DataFrame, path: Path) -> None:
+    """CPU cores / RAM / GPU usage over elapsed wall-clock time, shaded by pipeline
+    stage (fit/test/val/contamination). resource_monitor.py already samples on a
+    wall-clock timer, so this works the same whether the run was a single-epoch
+    stat model or a many-epoch gradient-trained one.
+
+    CPU cores and RAM are this job's own process (meaningful on a shared node);
+    GPU utilization is NVML's device-wide reading (meaningful when the job has
+    exclusive access to its GPU, the SLURM norm here) - each gets its own panel
+    since they're different units, not overlaid on one "percent" axis.
+    """
+    panel_specs = [
+        ("cpu_cores_used", "CPU cores (this process)", CATEGORICAL[0]),
+        ("ram_used_gb", "RAM (GB, this process)", CATEGORICAL[2]),
+        ("gpu_util_percent", "GPU util % (device-wide)", CATEGORICAL[1]),
+    ]
+    available = [spec for spec in panel_specs if resource_df is not None and not resource_df.empty
+                 and spec[0] in resource_df.columns and resource_df[spec[0]].notna().any()]
+    if not available:
+        empty_chart(path, "No resource samples recorded")
+        return
+
+    fig, axes = plt.subplots(len(available), 1, figsize=(7.5, 2.6 * len(available)), sharex=True)
+    axes = np.atleast_1d(axes)
+    fig.patch.set_facecolor(CHROME["surface"])
+
+    stages = list(dict.fromkeys(resource_df["stage"]))
+    stage_colors = {stage: CATEGORICAL[i % len(CATEGORICAL)] for i, stage in enumerate(stages)}
+
+    for ax, (col, label, color) in zip(axes, available):
+        for stage in stages:
+            stage_df = resource_df[resource_df["stage"] == stage]
+            ax.axvspan(stage_df["elapsed_sec"].min(), stage_df["elapsed_sec"].max(), color=stage_colors[stage], alpha=0.08, lw=0)
+        ax.plot(resource_df["elapsed_sec"], resource_df[col], color=color, linewidth=1.8)
+        ax.set_ylabel(label)
+        style_axes(ax)
+
+    axes[-1].set_xlabel("Elapsed time (s)")
+    axes[0].set_title("Resource usage over time")
+    save(fig, path)
+
+
 def chart_pixel_score_distribution(stats_df: pd.DataFrame, path: Path) -> None:
     if stats_df.empty:
         empty_chart(path)

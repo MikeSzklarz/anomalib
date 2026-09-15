@@ -65,7 +65,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
     parser.add_argument("--min_epochs", type=int, default=15)
-    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
@@ -95,6 +95,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check_contamination", action="store_true")
     parser.add_argument("--eval_val_test", action="store_true",
                         help="Run a secondary test pass over the Validation set and merge the CSV outputs.")
+
+    # Resource monitoring
+    parser.add_argument("--disable_resource_monitor", action="store_true",
+                        help="Disable CPU/GPU/memory resource monitoring (on by default).")
     return parser
 
 

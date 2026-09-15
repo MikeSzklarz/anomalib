@@ -24,12 +24,17 @@ from anomalib.loggers import AnomalibTensorBoardLogger
 
 from . import setup as dataset_model_setup
 from .analysis.orchestrate import run_post_test_analysis
-from .callbacks import FileLoggingCallback, RawDataExtractionCallback, RearrangeVisualizationsCallback
+from .callbacks import (
+    FileLoggingCallback,
+    RawDataExtractionCallback,
+    RearrangeVisualizationsCallback,
+    ResourceMonitorCallback,
+)
 from .utils import dir_size_bytes, get_git_commit
 
 
 def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dict[str, Any]):
-    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb)."""
+    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb)."""
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
 
     rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, subfolder="test", logger=logger, model_name=args.model)
@@ -37,6 +42,7 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         output_path=output_path, subfolder="test", logger=logger, compact=getattr(args, "compact_raw_outputs", False),
     )
     file_logging_cb = FileLoggingCallback(logger=logger)
+    resource_cb = None if args.disable_resource_monitor else ResourceMonitorCallback(output_path=output_path, logger=logger)
 
     callbacks = [
         EarlyStopping(monitor=monitor_metric, mode="max" if "loss" not in monitor_metric else "min", patience=args.patience, verbose=True),
@@ -44,6 +50,8 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         rearrange_cb,
         raw_data_cb,
     ]
+    if resource_cb is not None:
+        callbacks.append(resource_cb)
 
     if args.no_checkpoint:
         # --no_checkpoint was previously a dead flag (declared but never wired up).
@@ -60,7 +68,7 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         accelerator=args.accelerator, devices=args.devices,
         default_root_dir=str(output_path),
     )
-    return engine, rearrange_cb, raw_data_cb, file_logging_cb
+    return engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb
 
 
 def run(
@@ -81,7 +89,7 @@ def run(
     target_w: int | None,
     trainer_config: Dict[str, Any] | None = None,
 ) -> None:
-    engine, rearrange_cb, raw_data_cb, file_logging_cb = _build_engine(
+    engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb = _build_engine(
         args, monitor_metric, logger, output_path, trainer_config or {},
     )
 
@@ -93,12 +101,16 @@ def run(
 
     try:
         logger.info("Starting Fit...")
+        if resource_cb is not None:
+            resource_cb.stage = "fit"
         fit_start = time.time()
         engine.fit(model=model, datamodule=datamodule)
         durations_sec["fit"] = time.time() - fit_start
 
         # --- 1. NORMAL TEST (Test Set Only) ---
         logger.info("Starting Standard Test...")
+        if resource_cb is not None:
+            resource_cb.stage = "test"
         test_start = time.time()
         test_results = engine.test(model=model, datamodule=datamodule)
         durations_sec["test"] = time.time() - test_start
@@ -122,6 +134,8 @@ def run(
 
             rearrange_cb.subfolder = "val"
             raw_data_cb.subfolder = "val"
+            if resource_cb is not None:
+                resource_cb.stage = "val"
 
             logger.info(f"   Validation images to check: {len(datamodule.val_data)}")
 
@@ -151,6 +165,8 @@ def run(
 
             rearrange_cb.subfolder = "contamination"
             raw_data_cb.subfolder = "contamination"
+            if resource_cb is not None:
+                resource_cb.stage = "contamination"
 
             contamination_loader, contamination_pool_size = dataset_model_setup.build_contamination_datamodule(
                 args, DataClass, filtered_kwargs, exclude_files, datamodule, logger,
@@ -255,6 +271,26 @@ def run(
             epoch_df.to_csv(output_path / "epoch_metrics.csv", index=False)
 
         # ---------------------------------------------------------------------
+        # resource_usage/samples.csv - raw CPU/RAM/GPU samples from ResourceMonitorCallback,
+        # plus a per-stage mean/max summary folded into manifest.json below.
+        # ---------------------------------------------------------------------
+        resource_df = pd.DataFrame()
+        resource_summary: Dict[str, Any] = {}
+        if resource_cb is not None and resource_cb.samples:
+            try:
+                resource_df = pd.DataFrame(resource_cb.samples)
+                resource_dir = output_path / "resource_usage"
+                resource_dir.mkdir(parents=True, exist_ok=True)
+                resource_df.to_csv(resource_dir / "samples.csv", index=False)
+                numeric_cols = resource_df.select_dtypes("number").columns.drop("elapsed_sec", errors="ignore")
+                resource_summary = {
+                    stage: {col: {"mean": float(g[col].mean()), "max": float(g[col].max())} for col in numeric_cols}
+                    for stage, g in resource_df.groupby("stage")
+                }
+            except Exception as e:
+                logger.error(f"[resource_monitor] Failed to write resource_usage/samples.csv (non-fatal): {e}")
+
+        # ---------------------------------------------------------------------
         # Split composition, for the one-per-run chart + manifest.
         # ---------------------------------------------------------------------
         split_counts: Dict[str, Dict[str, int]] = {}
@@ -302,6 +338,7 @@ def run(
                 "timestamps": {"start": run_started_at.isoformat(), "end": run_ended_at.isoformat()},
                 "durations_sec": durations_sec,
                 "throughput_images_per_sec": throughput_images_per_sec,
+                "resource_usage": resource_summary,
                 "checkpoint_sizes_bytes": {
                     "lightning_checkpoint_total": lightning_ckpt_bytes,
                     "exported_weights_total": exported_weights_bytes,
@@ -327,6 +364,7 @@ def run(
                 per_image_stats_by_split=per_image_stats_by_split,
                 split_counts=split_counts,
                 epoch_df=epoch_df,
+                resource_df=resource_df,
             )
             logger.info(f"Analysis charts + summary written to: {analysis_dir}")
         except Exception as e:
