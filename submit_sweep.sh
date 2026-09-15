@@ -67,6 +67,19 @@ TOP_MODELS=(
     "uflow"
 )
 
+# Measured wall-clock minutes per model, from the results-rnd-4 full-zoo run.
+# Used only to order jobs for node assignment below (longest-first bin-packing) -
+# a rough prior, not a guarantee, since real duration depends on dataset size,
+# image_size, batch_size, etc. Models with no entry fall back to $DEFAULT_DURATION_MIN.
+declare -A MODEL_DURATION_MIN=(
+    [cflow]=175 [generalad]=100 [uflow]=90 [draem]=71 [dinomaly]=55
+    [ganomaly]=39 [efficientad]=38 [glass]=37 [uninet]=35 [inpformer]=31
+    [csflow]=27 [patchflow]=16 [cfa]=16 [supersimplenet]=16 [dsr]=15
+    [l2bt]=13 [fastflow]=13 [reversedistillation]=12 [stfpm]=7 [fre]=7
+    [anomalydino]=1 [dfkde]=1 [dfm]=1 [padim]=1 [patchcore]=1 [superadd]=1
+)
+DEFAULT_DURATION_MIN=5  # unknown/unprofiled models (e.g. anomalyvfm's last run errored before logging; cfm needs depth data)
+
 MODELS=()
 ZOO_SELECTION="small"
 
@@ -136,10 +149,26 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     fi
 fi
 
+# Reorder MODELS longest-known-duration-first, so the node-assignment loop below
+# can greedily bin-pack them (LPT heuristic) instead of just alternating by
+# array position - array order is arbitrary and can stack several slow models
+# onto the same node while the other sits idle.
+SORTED_MODELS=()
+while IFS=$'\t' read -r _ model; do
+    SORTED_MODELS+=("$model")
+done < <(
+    for m in "${MODELS[@]}"; do
+        printf '%s\t%s\n' "${MODEL_DURATION_MIN[$m]:-$DEFAULT_DURATION_MIN}" "$m"
+    done | sort -rn -k1,1
+)
+MODELS=("${SORTED_MODELS[@]}")
+
 mkdir -p logs/slurm
 
 IFS=',' read -r -a NODES_ARRAY <<< "$NODELIST"
 NUM_NODES=${#NODES_ARRAY[@]}
+declare -a NODE_LOAD_MIN=()
+for ((i = 0; i < NUM_NODES; i++)); do NODE_LOAD_MIN[$i]=0; done
 
 echo "========================================"
 echo "Starting Sweep"
@@ -161,10 +190,18 @@ for model in "${MODELS[@]}"; do
     
     SLURM_NODE_ARG=""
     if [ "$NUM_NODES" -gt 0 ]; then
-        node_index=$((count % NUM_NODES))
+        # Greedily assign to whichever node currently has the smallest projected load.
+        node_index=0
+        for ((i = 1; i < NUM_NODES; i++)); do
+            if [ "${NODE_LOAD_MIN[$i]}" -lt "${NODE_LOAD_MIN[$node_index]}" ]; then
+                node_index=$i
+            fi
+        done
         selected_node="${NODES_ARRAY[$node_index]}"
         SLURM_NODE_ARG="--nodelist=$selected_node"
-        echo "Assigning $model -> $selected_node"
+        model_duration="${MODEL_DURATION_MIN[$model]:-$DEFAULT_DURATION_MIN}"
+        NODE_LOAD_MIN[$node_index]=$((NODE_LOAD_MIN[$node_index] + model_duration))
+        echo "Assigning $model (~${model_duration}m) -> $selected_node (node running total: ${NODE_LOAD_MIN[$node_index]}m)"
     fi
 
     # Create a model-specific copy of the training arguments
@@ -202,3 +239,9 @@ for model in "${MODELS[@]}"; do
 done
 
 echo "Successfully submitted $count jobs."
+if [ "$NUM_NODES" -gt 0 ]; then
+    echo "Projected per-node load (minutes, based on historical/default durations):"
+    for ((i = 0; i < NUM_NODES; i++)); do
+        echo "  ${NODES_ARRAY[$i]}: ${NODE_LOAD_MIN[$i]}m"
+    done
+fi
