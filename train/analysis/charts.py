@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.patches import Patch
 
 from .palette import (
     CATEGORICAL,
@@ -284,22 +285,14 @@ def chart_split_composition(split_counts: dict[str, dict[str, int]], path: Path)
     save(fig, path)
 
 
-def chart_epoch_progression(epoch_df: pd.DataFrame, path: Path) -> None:
-    if epoch_df.empty or "epoch" not in epoch_df.columns:
-        empty_chart(path, "No epoch metrics recorded")
-        return
-    metric_cols = [c for c in epoch_df.columns if c != "epoch" and epoch_df[c].notna().any()]
-    if not metric_cols:
-        empty_chart(path, "No epoch metrics recorded")
-        return
+def _epoch_line_chart(epoch_df: pd.DataFrame, cols: list[str], ylabel: str, title: str, path: Path) -> None:
     fig, ax = new_fig((7, 4.5))
     n_epochs = epoch_df["epoch"].nunique()
-    for color, col in zip(CATEGORICAL, metric_cols):
+    for color, col in zip(CATEGORICAL, cols):
         marker = "o" if n_epochs <= 5 else None
         ax.plot(epoch_df["epoch"], epoch_df[col], color=color, linewidth=2, marker=marker, label=col)
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Value")
-    title = "Training curve"
+    ax.set_ylabel(ylabel)
     if n_epochs == 1:
         title += " (single-pass model - one epoch recorded)"
     ax.set_title(title)
@@ -308,42 +301,97 @@ def chart_epoch_progression(epoch_df: pd.DataFrame, path: Path) -> None:
     save(fig, path)
 
 
+def chart_epoch_progression_metrics(epoch_df: pd.DataFrame, path: Path) -> None:
+    """Evaluator metrics only (AUROC/F1Max/AUPR, ...) - bounded roughly [0, 1].
+    Split from loss onto its own axis/figure since loss lives on a totally
+    different, model-specific, often unbounded scale - overlaid together, one
+    of the two always gets flattened to a near-flat line."""
+    if epoch_df.empty or "epoch" not in epoch_df.columns:
+        empty_chart(path, "No epoch metrics recorded")
+        return
+    metric_cols = [c for c in epoch_df.columns if c != "epoch" and epoch_df[c].notna().any() and "loss" not in c.lower()]
+    if not metric_cols:
+        empty_chart(path, "No performance metrics recorded this epoch (loss-only model)")
+        return
+    _epoch_line_chart(epoch_df, metric_cols, "Metric value (0-1 scale)", "Training curve - performance metrics", path)
+
+
+def chart_epoch_progression_loss(epoch_df: pd.DataFrame, path: Path) -> None:
+    """Loss terms only (anything with 'loss' in the column name) - see
+    chart_epoch_progression_metrics for why this is a separate figure."""
+    if epoch_df.empty or "epoch" not in epoch_df.columns:
+        empty_chart(path, "No epoch metrics recorded")
+        return
+    loss_cols = [c for c in epoch_df.columns if c != "epoch" and epoch_df[c].notna().any() and "loss" in c.lower()]
+    if not loss_cols:
+        empty_chart(path, "No loss recorded this run (one-shot/statistical model - nothing is gradient-trained)")
+        return
+    _epoch_line_chart(epoch_df, loss_cols, "Loss value", "Training curve - loss", path)
+
+
+def _has_data(df: pd.DataFrame, col: str) -> bool:
+    return df is not None and not df.empty and col in df.columns and df[col].notna().any()
+
+
 def chart_resource_usage(resource_df: pd.DataFrame, path: Path) -> None:
     """CPU cores / RAM / GPU usage over elapsed wall-clock time, shaded by pipeline
     stage (fit/test/val/contamination). resource_monitor.py already samples on a
     wall-clock timer, so this works the same whether the run was a single-epoch
     stat model or a many-epoch gradient-trained one.
 
-    CPU cores and RAM are this job's own process (meaningful on a shared node);
-    GPU utilization is NVML's device-wide reading (meaningful when the job has
-    exclusive access to its GPU, the SLURM norm here) - each gets its own panel
-    since they're different units, not overlaid on one "percent" axis.
+    CPU cores and RAM are scoped to this job's own process (meaningful on a
+    shared node). GPU memory is plotted as allocated + reserved MB against a
+    dashed total-capacity reference line - all plain measured values, not a
+    device-wide ratio. GPU *utilization* percent and power draw are left out
+    of the chart for the same reason CPU/RAM percentages were dropped: neither
+    is attributable to this job specifically on a shared GPU (both still
+    recorded in samples.csv/manifest.json if you want them - normally fine to
+    trust on a SLURM cluster since GPUs are typically allocated exclusively
+    per job, not shared via MPS).
+    Each metric gets its own panel since they're different units. The lightly
+    shaded bands mark which pipeline stage was running - see the legend on the
+    top panel.
     """
-    panel_specs = [
-        ("cpu_cores_used", "CPU cores (this process)", CATEGORICAL[0]),
-        ("ram_used_gb", "RAM (GB, this process)", CATEGORICAL[2]),
-        ("gpu_util_percent", "GPU util % (device-wide)", CATEGORICAL[1]),
-    ]
-    available = [spec for spec in panel_specs if resource_df is not None and not resource_df.empty
-                 and spec[0] in resource_df.columns and resource_df[spec[0]].notna().any()]
-    if not available:
+    panels: list[tuple] = []
+    if _has_data(resource_df, "cpu_cores_used"):
+        panels.append(("line", "cpu_cores_used", "CPU cores", CATEGORICAL[0]))
+    if _has_data(resource_df, "ram_used_gb"):
+        panels.append(("line", "ram_used_gb", "RAM (GB)", CATEGORICAL[2]))
+    if _has_data(resource_df, "gpu_mem_used_mb"):
+        panels.append(("gpu_mem", None, "GPU memory (MB)", CATEGORICAL[3]))
+    if not panels:
         empty_chart(path, "No resource samples recorded")
         return
 
-    fig, axes = plt.subplots(len(available), 1, figsize=(7.5, 2.6 * len(available)), sharex=True)
+    fig, axes = plt.subplots(len(panels), 1, figsize=(7.5, 2.6 * len(panels)), sharex=True)
     axes = np.atleast_1d(axes)
     fig.patch.set_facecolor(CHROME["surface"])
 
     stages = list(dict.fromkeys(resource_df["stage"]))
     stage_colors = {stage: CATEGORICAL[i % len(CATEGORICAL)] for i, stage in enumerate(stages)}
 
-    for ax, (col, label, color) in zip(axes, available):
+    for ax, (kind, col, label, color) in zip(axes, panels):
         for stage in stages:
             stage_df = resource_df[resource_df["stage"] == stage]
-            ax.axvspan(stage_df["elapsed_sec"].min(), stage_df["elapsed_sec"].max(), color=stage_colors[stage], alpha=0.08, lw=0)
-        ax.plot(resource_df["elapsed_sec"], resource_df[col], color=color, linewidth=1.8)
+            ax.axvspan(stage_df["elapsed_sec"].min(), stage_df["elapsed_sec"].max(), color=stage_colors[stage], alpha=0.12, lw=0)
+
+        if kind == "line":
+            ax.plot(resource_df["elapsed_sec"], resource_df[col], color=color, linewidth=1.8)
+        elif kind == "gpu_mem":
+            ax.plot(resource_df["elapsed_sec"], resource_df["gpu_mem_used_mb"], color=color, linewidth=1.8, label="Allocated")
+            if _has_data(resource_df, "gpu_mem_reserved_mb"):
+                ax.plot(resource_df["elapsed_sec"], resource_df["gpu_mem_reserved_mb"], color=color, linewidth=1.2, linestyle=":", label="Reserved")
+            if _has_data(resource_df, "gpu_mem_total_mb"):
+                total = resource_df["gpu_mem_total_mb"].dropna().iloc[0]
+                ax.axhline(total, color=CHROME["ink"], linestyle="--", linewidth=1.2, label=f"GPU capacity ({total:.0f} MB)")
+            ax.legend(frameon=False, fontsize=8, loc="upper right", labelcolor=CHROME["ink_secondary"])
         ax.set_ylabel(label)
         style_axes(ax)
+
+    # One legend, on the top panel, explaining what each shaded band is -
+    # the bands are identical across every panel (same stage timeline).
+    stage_handles = [Patch(facecolor=stage_colors[s], alpha=0.35, label=s.capitalize()) for s in stages]
+    axes[0].legend(handles=stage_handles, loc="best", frameon=False, title="Stage", labelcolor=CHROME["ink_secondary"])
 
     axes[-1].set_xlabel("Elapsed time (s)")
     axes[0].set_title("Resource usage over time")

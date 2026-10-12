@@ -152,9 +152,14 @@ def generate_run_level_analysis(
         logger.warning(f"[analysis] Skipping split composition chart: {exc}")
 
     try:
-        charts.chart_epoch_progression(epoch_df if epoch_df is not None else pd.DataFrame(), figures_dir / "epoch_progression.png")
+        charts.chart_epoch_progression_metrics(epoch_df if epoch_df is not None else pd.DataFrame(), figures_dir / "epoch_progression_metrics.png")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[analysis] Skipping epoch progression chart: {exc}")
+        logger.warning(f"[analysis] Skipping epoch progression (metrics) chart: {exc}")
+
+    try:
+        charts.chart_epoch_progression_loss(epoch_df if epoch_df is not None else pd.DataFrame(), figures_dir / "epoch_progression_loss.png")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[analysis] Skipping epoch progression (loss) chart: {exc}")
 
     try:
         charts.chart_resource_usage(resource_df if resource_df is not None else pd.DataFrame(), figures_dir / "resource_usage.png")

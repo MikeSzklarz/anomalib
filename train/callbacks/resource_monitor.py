@@ -55,6 +55,12 @@ class ResourceMonitorCallback(Callback):
         self._run_started_at: float = time.time()
         self._warned_tick_error = False
         self._process = psutil.Process(os.getpid())
+        self._gpu_mem_total_mb = None
+        if torch.cuda.is_available():
+            try:
+                self._gpu_mem_total_mb = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1e6
+            except Exception as e:
+                self.logger.warning(f"[resource_monitor] Could not read total GPU memory: {e}")
         self._nvml_handle = None
         if pynvml is not None:
             try:
@@ -75,6 +81,8 @@ class ResourceMonitorCallback(Callback):
 
         if torch.cuda.is_available():
             row["gpu_mem_used_mb"] = torch.cuda.memory_allocated() / 1e6
+            row["gpu_mem_reserved_mb"] = torch.cuda.memory_reserved() / 1e6
+            row["gpu_mem_total_mb"] = self._gpu_mem_total_mb
 
         if self._nvml_handle is not None:
             try:
