@@ -86,7 +86,7 @@ DEFAULT_DURATION_MIN=5  # unknown/unprofiled models (e.g. anomalyvfm's last run 
 MODELS=()
 ZOO_SELECTION="small"
 
-PARTITION="waccamaw"
+PARTITION=""
 NODELIST=""
 DATASET="unknown"
 TRAIN_ARGS=()
