@@ -10,9 +10,9 @@ from anomalib.data import (
 
 from anomalib.models import (
     AnomalyDINO, AnomalyVFM, CFM, Cfa, Cflow, Csflow, Dfkde, Dfm,
-    Dinomaly, Draem, Dsr, EfficientAd, Fastflow,
-    Fre, Ganomaly, GeneralAD, Glass, InpFormer, L2BT, Padim, Patchcore, Patchflow,
-    ReverseDistillation, Stfpm, SuperADD, Supersimplenet, Uflow, UniNet
+    Dinomaly, Draem, Dsr, EfficientAd, Fastflow, FoundAD,
+    Fre, Ganomaly, GeneralAD, Glass, InpFormer, L2BT, MHPatchcore, Padim, Patchcore, Patchflow,
+    Rad, ReverseDistillation, Stfpm, SuperADD, Supersimplenet, Uflow, UniNet
 )
 
 MODEL_MAP: Dict[str, Type] = {
@@ -29,15 +29,18 @@ MODEL_MAP: Dict[str, Type] = {
     "dsr": Dsr,
     "efficientad": EfficientAd,
     "fastflow": Fastflow,
+    "foundad": FoundAD,
     "fre": Fre,
     "ganomaly": Ganomaly,
     "generalad": GeneralAD,
     "glass": Glass,
     "inpformer": InpFormer,
     "l2bt": L2BT,
+    "mhpatchcore": MHPatchcore,
     "padim": Padim,
     "patchcore": Patchcore,
     "patchflow": Patchflow,
+    "rad": Rad,
     "reversedistillation": ReverseDistillation,
     "stfpm": Stfpm,
     "superadd": SuperADD,

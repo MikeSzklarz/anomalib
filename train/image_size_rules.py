@@ -28,6 +28,9 @@ import argparse
 #   "fixed"       - architecture hardcodes a single resolution; image_size can't change
 #   "patch_floor" - must be >= `floor` (its patch_size); no other constraint found
 #   "safe_set"    - no clean formula; snap to nearest confirmed-working value
+#   "crop_fixed"  - pre-processor resizes to `value` then center-crops to a hardcoded `crop`,
+#                   so the model always sees `crop`; image_size only moves the resize, which
+#                   narrows the field of view (larger) or zero-pads the input (smaller than crop)
 MODEL_IMAGE_SIZE_RULES = {
     # no constraint found in tested range
     "anomalydino": {"kind": "free", "default": 252},
@@ -53,12 +56,16 @@ MODEL_IMAGE_SIZE_RULES = {
     "uninet": {"kind": "divisor", "divisor": 32, "default": 256},
     # divisible by 14 (ViT patch14 backbone), no minimum floor
     "l2bt": {"kind": "divisor", "divisor": 14, "default": 224},
+    "foundad": {"kind": "divisor", "divisor": 14, "default": 518},
     # divisible by 14 AND >= 392 (hardcoded CenterCrop(392) ahead of the ViT)
     "dinomaly": {"kind": "divisor", "divisor": 14, "floor": 392, "default": 392},
     "inpformer": {"kind": "divisor", "divisor": 14, "floor": 392, "default": 392},
     # architecture is locked to one resolution; image_size cannot meaningfully change
     "fre": {"kind": "fixed", "value": 256, "default": 256},
     "uflow": {"kind": "fixed", "value": 448, "default": 448},
+    # resize then a hardcoded center crop (mhpatchcore 256->224, rad 512->448); see "crop_fixed" above
+    "mhpatchcore": {"kind": "crop_fixed", "value": 256, "crop": 224, "default": 256},
+    "rad": {"kind": "crop_fixed", "value": 512, "crop": 448, "default": 512},
     # must be >= patch_size (default 448); no other constraint found up to 768
     "superadd": {"kind": "patch_floor", "floor": 448, "default": 448},
     # needs a minimum floor (~256) for its conv kernels to fit; no divisor rule found
@@ -93,6 +100,13 @@ def _resolve(spec: dict, model: str, target: float, bias: str, max_size: int | N
     if spec["kind"] == "fixed":
         value = spec["value"]
         return value, f"{model} hardcodes its resolution; image_size is locked to {value}."
+
+    if spec["kind"] == "crop_fixed":
+        value, crop = spec["value"], spec["crop"]
+        return value, (
+            f"{model} center-crops to a hardcoded {crop} after resizing; image_size is locked to {value} "
+            f"(the model input is always {crop})."
+        )
 
     if spec["kind"] == "free":
         value = int(round(target))
@@ -179,6 +193,18 @@ def validate_image_size(model: str, height: int, width: int) -> str | None:
             f"matching its known constraints is {valid_value}. This may fail once training actually starts."
         )
     return None
+
+
+def locked_image_size(model: str) -> int | None:
+    """The only image_size `model` can safely take, for models whose pre-processor
+    hardcodes a center crop ("crop_fixed"); None for every other model.
+
+    Unlike the other kinds, an off-value here is never a real resolution change - the
+    model input stays at the crop size - so callers should force this value rather
+    than just warn.
+    """
+    spec = MODEL_IMAGE_SIZE_RULES.get(model, {})
+    return spec["value"] if spec.get("kind") == "crop_fixed" else None
 
 
 def main() -> None:

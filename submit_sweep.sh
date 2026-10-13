@@ -32,6 +32,8 @@ FULL_MODELS=(
     "patchflow"
     "anomalydino"
     "cfa"
+    "mhpatchcore"
+    "rad"
     # --- Known slow ---
     "uflow"
     # --- Moderate performers ---
@@ -51,6 +53,7 @@ FULL_MODELS=(
     "generalad"             # AUROC below random last run - likely a score-direction bug
     # --- No historical data on this dataset ---
     "cfm"
+    "foundad"
 )
 
 TOP_MODELS=(

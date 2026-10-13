@@ -22,7 +22,7 @@ DEFAULT_TEXT_CONFIG["enable"] = False
 from . import pipeline
 from . import setup as dataset_model_setup
 from .image_size import get_resize_target, log_image_size_analysis
-from .image_size_rules import MODEL_IMAGE_SIZE_RULES, resolve_from_ratio, validate_image_size
+from .image_size_rules import MODEL_IMAGE_SIZE_RULES, locked_image_size, resolve_from_ratio, validate_image_size
 from .registry import DATASET_MAP, MODEL_MAP
 from .utils import load_yaml_config, setup_logger
 
@@ -178,9 +178,19 @@ def main():
         baseline_size = MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default", "unknown")
         logger.info(f"[image_size] Explicit override: {args.image_size} (model baseline default: {baseline_size})")
         target_h, target_w = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
-        size_warning = validate_image_size(args.model, target_h, target_w)
-        if size_warning:
-            logger.warning(f"[image_size] {size_warning}")
+        locked_size = locked_image_size(args.model)
+        if locked_size is not None and (target_h, target_w) != (locked_size, locked_size):
+            logger.warning(
+                f"[image_size] Ignoring --image_size {args.image_size} for '{args.model}': its pre-processor "
+                f"center-crops to a hardcoded size, so another value would only crop away more of the image or "
+                f"zero-pad it. Using the locked default ({locked_size})."
+            )
+            args.image_size = None
+            target_h = target_w = locked_size
+        else:
+            size_warning = validate_image_size(args.model, target_h, target_w)
+            if size_warning:
+                logger.warning(f"[image_size] {size_warning}")
     else:
         baseline_size = MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default", "unknown")
         logger.info(f"[image_size] Using model baseline default: {baseline_size}")
