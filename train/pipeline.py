@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +36,7 @@ from .utils import dir_size_bytes, get_git_commit
 
 
 def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dict[str, Any]):
-    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb)."""
+    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, best_cb)."""
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
 
     rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, subfolder="test", logger=logger, model_name=args.model)
@@ -44,8 +46,9 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
     file_logging_cb = FileLoggingCallback(logger=logger)
     resource_cb = None if args.disable_resource_monitor else ResourceMonitorCallback(output_path=output_path, logger=logger)
 
+    monitor_mode = "max" if "loss" not in monitor_metric else "min"
     callbacks = [
-        EarlyStopping(monitor=monitor_metric, mode="max" if "loss" not in monitor_metric else "min", patience=args.patience, verbose=True),
+        EarlyStopping(monitor=monitor_metric, mode=monitor_mode, patience=args.patience, verbose=True),
         file_logging_cb,
         rearrange_cb,
         raw_data_cb,
@@ -53,13 +56,22 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
     if resource_cb is not None:
         callbacks.append(resource_cb)
 
+    # Keep only the best-scoring epoch on the same metric early stopping watches, so it can
+    # be restored after fit (see _restore_best_checkpoint). Without this, everything after
+    # fit - test, val, contamination, export - used the LAST epoch: best + `patience`.
+    # Having our own ModelCheckpoint also stops Engine adding its default last-epoch one.
+    # With --no_checkpoint the best epoch still has to hit disk to be restored, so it goes
+    # to a temp dir that _restore_best_checkpoint deletes; nothing is left in the results.
     if args.no_checkpoint:
-        # --no_checkpoint was previously a dead flag (declared but never wired up).
-        # Adding our own ModelCheckpoint with save_top_k=0 satisfies Engine's
-        # "already has a checkpoint callback" check, so it never adds its default
-        # one - no weights/lightning/model.ckpt gets written at all.
-        callbacks.append(ModelCheckpoint(save_top_k=0, save_last=False))
-        logger.info("[checkpoint] --no_checkpoint set: Lightning checkpoint saving is disabled.")
+        ckpt_dir = Path(tempfile.mkdtemp(prefix="best_ckpt_"))
+        logger.info("[checkpoint] --no_checkpoint set: best epoch is kept in a temp file only, deleted after restoring.")
+    else:
+        ckpt_dir = output_path / "weights" / "lightning"
+    best_cb = ModelCheckpoint(
+        dirpath=ckpt_dir, filename="model", monitor=monitor_metric, mode=monitor_mode,
+        save_top_k=1, save_last=False, auto_insert_metric_name=False,
+    )
+    callbacks.append(best_cb)
 
     engine = Engine(
         callbacks=callbacks, logger=tb_logger,
@@ -68,7 +80,38 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         accelerator=args.accelerator, devices=args.devices,
         default_root_dir=str(output_path),
     )
-    return engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb
+    return engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, best_cb
+
+
+def _restore_best_checkpoint(model, engine, best_cb, monitor_metric: str, args, logger) -> Dict[str, Any]:
+    """Load the best epoch's weights into `model` in place, so every later step (test,
+    val pass, contamination, export) uses them. The checkpoint's state_dict also carries
+    the post-processor threshold/normalization computed in that same epoch's validation,
+    so weights and threshold stay consistent. Returns a summary for manifest.json."""
+    epochs_trained = int(engine.trainer.current_epoch)
+    summary: Dict[str, Any] = {"monitor": monitor_metric, "epochs_trained": epochs_trained, "restored": False,
+                               "best_epoch": None, "best_score": None}
+    best_path = best_cb.best_model_path
+    try:
+        if not best_path or not Path(best_path).is_file():
+            logger.warning(
+                f"[checkpoint] No best checkpoint was saved ('{monitor_metric}' never logged?) - "
+                f"evaluating the final weights (epoch {epochs_trained - 1})."
+            )
+            return summary
+        checkpoint = torch.load(best_path, map_location=model.device, weights_only=False)
+        model.load_state_dict(checkpoint["state_dict"])
+        best_score = best_cb.best_model_score
+        summary.update(restored=True, best_epoch=int(checkpoint["epoch"]),
+                       best_score=float(best_score) if best_score is not None else None)
+        logger.info(
+            f"[checkpoint] Restored best epoch {summary['best_epoch']} ({monitor_metric}={summary['best_score']:.4f}) "
+            f"out of {epochs_trained} trained; test/val/contamination/export use these weights."
+        )
+    finally:
+        if args.no_checkpoint:
+            shutil.rmtree(best_cb.dirpath, ignore_errors=True)
+    return summary
 
 
 def run(
@@ -89,7 +132,7 @@ def run(
     target_w: int | None,
     trainer_config: Dict[str, Any] | None = None,
 ) -> None:
-    engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb = _build_engine(
+    engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, best_cb = _build_engine(
         args, monitor_metric, logger, output_path, trainer_config or {},
     )
 
@@ -106,6 +149,7 @@ def run(
         fit_start = time.time()
         engine.fit(model=model, datamodule=datamodule)
         durations_sec["fit"] = time.time() - fit_start
+        checkpoint_selection = _restore_best_checkpoint(model, engine, best_cb, monitor_metric, args, logger)
 
         # --- 1. NORMAL TEST (Test Set Only) ---
         logger.info("Starting Standard Test...")
@@ -336,6 +380,7 @@ def run(
                 "experiment_file": experiment_summary,
                 "dataset_stats": dataset_stats,
                 "timestamps": {"start": run_started_at.isoformat(), "end": run_ended_at.isoformat()},
+                "checkpoint_selection": checkpoint_selection,
                 "durations_sec": durations_sec,
                 "throughput_images_per_sec": throughput_images_per_sec,
                 "resource_usage": resource_summary,
