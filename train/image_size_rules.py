@@ -159,7 +159,7 @@ def resolve_from_ratio(model: str, ratio: float, max_size: int | None = None) ->
     the snapped value - meaning an experiment at this ratio would be indistinguishable
     from the baseline run and should be skipped rather than wasting a training run.
     ratio=1.0 is never skipped: it explicitly asks for the baseline, so a ratio sweep
-    can include it and get the baseline run in its own imgsize_<size> folder.
+    can include it and get the baseline run in its own baseline_<size> folder.
     """
     spec = _known_model(model)
     baseline = spec["default"]

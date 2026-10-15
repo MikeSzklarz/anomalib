@@ -156,7 +156,9 @@ def main():
 
     output_path = Path(args.output_dir) / args.model / args.dataset / args.category
     if resolved_image_size is not None:
-        output_path = output_path / f"imgsize_{resolved_image_size}"
+        # ratio 1.0 is the model's own default size: name it so it stands out among the ratio runs.
+        prefix = "baseline" if args.image_size_ratio == 1.0 else "imgsize"
+        output_path = output_path / f"{prefix}_{resolved_image_size}"
     logger = setup_logger(output_path, args.model)
     logger.info(f"Experiment Args: {vars(args)}")
     if experiment_summary:
