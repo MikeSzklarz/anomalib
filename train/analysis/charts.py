@@ -29,6 +29,16 @@ from .palette import (
 )
 
 
+def threshold_text(threshold: float) -> str:
+    """The one label every figure uses for the threshold. Raw scores range from ~0.01
+    to ~10,000 depending on the model, so 4 significant digits, not fixed decimals."""
+    return f"Threshold: {threshold:.4g}"
+
+
+def _has_threshold(threshold: float | None) -> bool:
+    return threshold is not None and np.isfinite(threshold)
+
+
 def _hist_kde_combo(
     ax: plt.Axes,
     normal: pd.Series,
@@ -73,8 +83,8 @@ def chart_score_distribution(df: pd.DataFrame, threshold: float | None, path: Pa
         return
     fig, ax = new_fig((7, 4.5))
     _hist_kde_combo(ax, normal, anomalous, "Anomaly score (raw)")
-    if threshold is not None and np.isfinite(threshold):
-        ax.axvline(threshold, color=CHROME["ink"], linestyle="--", linewidth=1.5, label="Threshold")
+    if _has_threshold(threshold):
+        ax.axvline(threshold, color=CHROME["ink"], linestyle="--", linewidth=1.5, label=threshold_text(threshold))
     ax.set_title("Score distribution")
     style_axes(ax)
     ax.legend(frameon=False, labelcolor=CHROME["ink_secondary"])
@@ -113,7 +123,7 @@ def chart_pr_curve(roc_data: dict[str, Any] | None, path: Path) -> None:
     save(fig, path)
 
 
-def chart_confusion_matrix(counts: dict[str, int], path: Path, title: str = "Confusion matrix") -> None:
+def chart_confusion_matrix(counts: dict[str, int], path: Path, title: str = "Confusion matrix", threshold: float | None = None) -> None:
     tn, fp, fn, tp = counts["TN"], counts["FP"], counts["FN"], counts["TP"]
     z = np.array([[tn, fp], [fn, tp]])
     z_norm = z / max(z.max(), 1)
@@ -133,13 +143,17 @@ def chart_confusion_matrix(counts: dict[str, int], path: Path, title: str = "Con
             text_color = "#ffffff" if luminance < 0.6 else CHROME["ink"]
             ax.text(j, i, str(int(z[i, j])), ha="center", va="center", fontsize=16, fontweight="bold", color=text_color)
     ax.set_title(title)
+    if _has_threshold(threshold):
+        # Below the column labels, right-aligned: clear of the cells and the title.
+        ax.annotate(threshold_text(threshold), xy=(1, 0), xycoords="axes fraction", xytext=(0, -28),
+                    textcoords="offset points", ha="right", va="top", fontsize=10, color=CHROME["ink_secondary"])
     for spine in ax.spines.values():
         spine.set_visible(False)
     fig.patch.set_facecolor(CHROME["surface"])
     save(fig, path)
 
 
-def chart_contamination_summary(counts: dict[str, int], path: Path) -> None:
+def chart_contamination_summary(counts: dict[str, int], threshold: float | None, path: Path) -> None:
     """Contamination pool is entirely 'normal' by label - show flagged vs clean."""
     flagged = counts.get("FP", 0)
     clean = counts.get("TN", 0)
@@ -150,12 +164,18 @@ def chart_contamination_summary(counts: dict[str, int], path: Path) -> None:
     fig, ax = new_fig((7, 2.4))
     ax.barh([0], [clean], color=STATUS["good"], label="Clean (below threshold)")
     ax.barh([0], [flagged], left=[clean], color=STATUS["critical"], label="Flagged (above threshold)")
+    if _has_threshold(threshold):
+        ax.plot([], [], linestyle="none", label=threshold_text(threshold))
     pct = 100 * flagged / total
     ax.set_yticks([])
     ax.set_xlim(0, total * 1.02)
     ax.set_title(f"Contamination scan: {flagged}/{total} training-pool images flagged as anomalous ({pct:.1f}%)")
     style_axes(ax, grid_axis="x")
-    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.35), ncol=2, labelcolor=CHROME["ink_secondary"])
+    # Matplotlib lists line entries before bar entries; put the threshold text last.
+    handles, labels = ax.get_legend_handles_labels()
+    order = sorted(range(len(labels)), key=lambda i: labels[i].startswith("Threshold"))
+    ax.legend([handles[i] for i in order], [labels[i] for i in order], frameon=False, loc="upper center",
+              bbox_to_anchor=(0.5, -0.35), ncol=3, labelcolor=CHROME["ink_secondary"])
     save(fig, path)
 
 
@@ -167,14 +187,15 @@ def chart_threshold_sweep(sweep_df: pd.DataFrame, current_threshold: float | Non
     metric_cols = ["precision", "recall", "f1", "false_alarm_rate", "miss_rate"]
     for color, col in zip(CATEGORICAL, metric_cols):
         ax.plot(sweep_df["threshold"], sweep_df[col], color=color, linewidth=2, label=col.replace("_", " "))
-    if current_threshold is not None and np.isfinite(current_threshold):
-        ax.axvline(current_threshold, color=CHROME["ink"], linestyle="--", linewidth=1.2, label="Operating threshold")
+    if _has_threshold(current_threshold):
+        ax.axvline(current_threshold, color=CHROME["ink"], linestyle="--", linewidth=1.2, label=threshold_text(current_threshold))
     ax.set_xlabel("Threshold (raw score)")
     ax.set_ylabel("Metric value")
     ax.set_ylim(0, 1.02)
     ax.set_title("Metrics vs. threshold")
     style_axes(ax)
-    ax.legend(frameon=False, ncol=2, fontsize=9, labelcolor=CHROME["ink_secondary"])
+    # Below the plot area: inside it, the legend sat on top of the curves.
+    ax.legend(frameon=False, ncol=3, fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.14), labelcolor=CHROME["ink_secondary"])
     save(fig, path)
 
 
@@ -254,8 +275,8 @@ def chart_defect_score_spread(df: pd.DataFrame, threshold: float | None, path: P
         alpha=0.85,
         jitter=0.25,
     )
-    if threshold is not None and np.isfinite(threshold):
-        ax.axvline(threshold, color=CHROME["ink"], linestyle="--", linewidth=1.5, label="Threshold")
+    if _has_threshold(threshold):
+        ax.axvline(threshold, color=CHROME["ink"], linestyle="--", linewidth=1.5, label=threshold_text(threshold))
         # Above the plot area so it can never cover a row of dots.
         ax.legend(frameon=False, loc="lower right", bbox_to_anchor=(1.0, 1.0), borderaxespad=0.2, labelcolor=CHROME["ink_secondary"])
     ax.set_xlabel("Anomaly score (raw)")

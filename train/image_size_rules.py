@@ -158,12 +158,14 @@ def resolve_from_ratio(model: str, ratio: float, max_size: int | None = None) ->
     resolution is architecturally frozen, or because `ratio` was too small to move
     the snapped value - meaning an experiment at this ratio would be indistinguishable
     from the baseline run and should be skipped rather than wasting a training run.
+    ratio=1.0 is never skipped: it explicitly asks for the baseline, so a ratio sweep
+    can include it and get the baseline run in its own imgsize_<size> folder.
     """
     spec = _known_model(model)
     baseline = spec["default"]
     target = baseline * ratio
     value, explanation = _resolve(spec, model, target, bias="nearest", max_size=max_size)
-    skipped = value == baseline
+    skipped = value == baseline and ratio != 1.0
     skip_note = " SKIPPED: resolves to the same size as baseline, nothing to compare." if skipped else ""
     full_explanation = f"baseline={baseline}, ratio={ratio} -> target={target:.1f}. {explanation}{skip_note}"
     return value, baseline, skipped, full_explanation

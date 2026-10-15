@@ -80,11 +80,11 @@ def generate_split_analysis(
     safe("score distribution chart", charts.chart_score_distribution, df, threshold, figures_dir / f"score_distribution_{split_key}.png")
 
     if split_key == "contamination":
-        safe("contamination summary chart", charts.chart_contamination_summary, confusion, figures_dir / "contamination_flagged_summary.png")
+        safe("contamination summary chart", charts.chart_contamination_summary, confusion, threshold, figures_dir / "contamination_flagged_summary.png")
     else:
         safe("roc chart", charts.chart_roc_curve, roc_data, figures_dir / f"roc_curve_{split_key}.png")
         safe("pr chart", charts.chart_pr_curve, roc_data, figures_dir / f"pr_curve_{split_key}.png")
-        safe("confusion matrix chart", charts.chart_confusion_matrix, confusion, figures_dir / f"confusion_matrix_{split_key}.png", f"Confusion matrix ({split})")
+        safe("confusion matrix chart", charts.chart_confusion_matrix, confusion, figures_dir / f"confusion_matrix_{split_key}.png", f"Confusion matrix ({split})", threshold)
 
         try:
             sweep_df = compute_threshold_sweep(df) if not df.empty else pd.DataFrame()
