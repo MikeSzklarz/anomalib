@@ -21,6 +21,7 @@ DEFAULT_TEXT_CONFIG["enable"] = False
 
 from . import pipeline
 from . import setup as dataset_model_setup
+from .callbacks.time_limit import parse_max_time
 from .image_size import get_resize_target, log_image_size_analysis
 from .image_size_rules import MODEL_IMAGE_SIZE_RULES, locked_image_size, resolve_from_ratio, validate_image_size
 from .registry import DATASET_MAP, MODEL_MAP
@@ -65,7 +66,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
     parser.add_argument("--min_epochs", type=int, default=15)
-    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--patience", type=int, default=20,
+                        help="Epochs without improvement before early stopping. The best epoch is restored "
+                             "afterwards, so a longer patience only costs time, not accuracy.")
+    parser.add_argument("--max_time", type=str, default="05:00:00",
+                        help="Wall-clock cap on TRAINING, as HH:MM:SS or D:HH:MM:SS (default 05:00:00, sized for "
+                             "the 6h SLURM jobs). When hit, training stops (even before min_epochs) and the run "
+                             "continues to restore-best/test/val/contamination/export. 'none' disables it.")
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
@@ -135,6 +142,13 @@ def _validate_args(args, parser: argparse.ArgumentParser) -> None:
         parser.error(f"--dataset is required and must be one of {sorted(DATASET_MAP)} (via --dataset or --experiment)")
     if args.image_size and args.image_size_ratio is not None:
         parser.error("--image_size and --image_size_ratio are mutually exclusive.")
+    if args.max_time is not None and args.max_time.lower() == "none":
+        args.max_time = None
+    if args.max_time is not None:
+        try:
+            parse_max_time(args.max_time)
+        except ValueError as e:
+            parser.error(str(e))
 
 
 def main():

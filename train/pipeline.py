@@ -31,7 +31,9 @@ from .callbacks import (
     RawDataExtractionCallback,
     RearrangeVisualizationsCallback,
     ResourceMonitorCallback,
+    TrainingTimeLimitCallback,
 )
+from .callbacks.time_limit import parse_max_time
 from .utils import dir_size_bytes, get_git_commit
 
 
@@ -55,6 +57,9 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
     ]
     if resource_cb is not None:
         callbacks.append(resource_cb)
+    if args.max_time:
+        callbacks.append(TrainingTimeLimitCallback(parse_max_time(args.max_time), logger))
+        logger.info(f"[max_time] Training will stop after {parse_max_time(args.max_time)} of wall-clock time.")
 
     # Keep only the best-scoring epoch on the same metric early stopping watches, so it can
     # be restored after fit (see _restore_best_checkpoint). Without this, everything after
@@ -89,8 +94,17 @@ def _restore_best_checkpoint(model, engine, best_cb, monitor_metric: str, args, 
     the post-processor threshold/normalization computed in that same epoch's validation,
     so weights and threshold stay consistent. Returns a summary for manifest.json."""
     epochs_trained = int(engine.trainer.current_epoch)
-    summary: Dict[str, Any] = {"monitor": monitor_metric, "epochs_trained": epochs_trained, "restored": False,
-                               "best_epoch": None, "best_score": None}
+    callbacks = engine.trainer.callbacks
+    time_cb = next((c for c in callbacks if isinstance(c, TrainingTimeLimitCallback)), None)
+    early_cb = next((c for c in callbacks if isinstance(c, EarlyStopping)), None)
+    if time_cb is not None and time_cb.fired:
+        stop_reason = "max_time"
+    elif early_cb is not None and early_cb.stopped_epoch > 0:
+        stop_reason = "early_stopping"
+    else:
+        stop_reason = "max_epochs"  # the trainer's or the model's own (e.g. single-pass models)
+    summary: Dict[str, Any] = {"monitor": monitor_metric, "epochs_trained": epochs_trained, "stop_reason": stop_reason,
+                               "restored": False, "best_epoch": None, "best_score": None}
     best_path = best_cb.best_model_path
     try:
         if not best_path or not Path(best_path).is_file():
@@ -106,7 +120,7 @@ def _restore_best_checkpoint(model, engine, best_cb, monitor_metric: str, args, 
                        best_score=float(best_score) if best_score is not None else None)
         logger.info(
             f"[checkpoint] Restored best epoch {summary['best_epoch']} ({monitor_metric}={summary['best_score']:.4f}) "
-            f"out of {epochs_trained} trained; test/val/contamination/export use these weights."
+            f"out of {epochs_trained} trained (stopped by {stop_reason}); test/val/contamination/export use these weights."
         )
     finally:
         if args.no_checkpoint:
@@ -150,6 +164,14 @@ def run(
         engine.fit(model=model, datamodule=datamodule)
         durations_sec["fit"] = time.time() - fit_start
         checkpoint_selection = _restore_best_checkpoint(model, engine, best_cb, monitor_metric, args, logger)
+        # The epoch limits that actually applied: config values win over the CLI flags, and the
+        # model's own trainer_arguments (e.g. max_epochs=1 for single-pass models) win over both.
+        checkpoint_selection["effective_epochs"] = {
+            "min_epochs": (trainer_config or {}).get("min_epochs", args.min_epochs),
+            "max_epochs": engine.trainer.max_epochs,
+            "patience": args.patience,
+            "max_time": args.max_time,
+        }
 
         # --- 1. NORMAL TEST (Test Set Only) ---
         logger.info("Starting Standard Test...")
