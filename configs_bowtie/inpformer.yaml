@@ -1,2 +1,4 @@
+# Fixed length (min = max): anomalib's default 200 epochs; its warmup (stepped per epoch in anomalib) ends at epoch 100.
 trainer:
+  min_epochs: 200
   max_epochs: 200

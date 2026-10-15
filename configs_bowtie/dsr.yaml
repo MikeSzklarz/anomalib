@@ -1,2 +1,4 @@
+# Fixed length (min = max): the upsampling module that produces the anomaly maps only trains from 70% of max_epochs (epoch 70).
 trainer:
+  min_epochs: 100
   max_epochs: 100

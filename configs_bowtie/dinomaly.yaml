@@ -1,2 +1,4 @@
+# Fixed length (min = max): ~anomalib's 5,000-step default at batch 32 / 795 images; its warmup (stepped per epoch in anomalib) ends at epoch 100.
 trainer:
   min_epochs: 200
+  max_epochs: 200

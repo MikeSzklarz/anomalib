@@ -1,2 +1,4 @@
+# Fixed length (min = max): LR drops at 80% and 90% of max_epochs; 300 is its README's recommendation.
 trainer:
   min_epochs: 300
+  max_epochs: 300

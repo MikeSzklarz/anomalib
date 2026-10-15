@@ -3,6 +3,3 @@ model:
   init_args:
     padding: false
     pad_maps: false
-
-trainer:
-  min_epochs: 234

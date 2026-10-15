@@ -1,0 +1,4 @@
+# Fixed length (min = max): LR drops at 80% of max_epochs; 100 is anomalib's config.
+trainer:
+  min_epochs: 100
+  max_epochs: 100

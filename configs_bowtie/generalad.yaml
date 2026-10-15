@@ -1,2 +1,4 @@
+# Fixed length (min = max): its cosine LR schedule runs over 160 epochs and climbs back up after that.
 trainer:
+  min_epochs: 160
   max_epochs: 160
