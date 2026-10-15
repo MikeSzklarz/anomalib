@@ -21,6 +21,7 @@ from torchvision.transforms import v2
 from anomalib.data.utils.split import TestSplitMode, ValSplitMode
 from anomalib.metrics import AUPR, AUROC, Evaluator, F1Max, F1Score
 
+from .image_size_rules import pre_processor_kwargs
 from .registry import DATASET_MAP, MODEL_MAP
 from .utils import get_init_args
 
@@ -340,11 +341,11 @@ def build_model(args, yaml_config: Dict[str, Any], logger, resolved_image_size: 
     if resolved_image_size or args.image_size or _use_color_prep:
         try:
             if resolved_image_size:
-                img_size = (resolved_image_size, resolved_image_size)
-                pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
+                pre_processor = ModelClass.configure_pre_processor(
+                    **pre_processor_kwargs(args.model, resolved_image_size, resolved_image_size))
             elif args.image_size:
                 img_size = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
-                pre_processor = ModelClass.configure_pre_processor(image_size=img_size)
+                pre_processor = ModelClass.configure_pre_processor(**pre_processor_kwargs(args.model, *img_size))
             else:
                 pre_processor = ModelClass.configure_pre_processor()
 

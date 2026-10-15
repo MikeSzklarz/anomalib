@@ -57,9 +57,12 @@ MODEL_IMAGE_SIZE_RULES = {
     # divisible by 14 (ViT patch14 backbone), no minimum floor
     "l2bt": {"kind": "divisor", "divisor": 14, "default": 224},
     "foundad": {"kind": "divisor", "divisor": 14, "default": 518},
-    # divisible by 14 AND >= 392 (hardcoded CenterCrop(392) ahead of the ViT)
-    "dinomaly": {"kind": "divisor", "divisor": 14, "floor": 392, "default": 392},
-    "inpformer": {"kind": "divisor", "divisor": 14, "floor": 392, "default": 392},
+    # divisible by 14 (ViT patch14). Their pre-processor resizes then center-crops (default
+    # 448 -> 392). The size here is the crop - what the model actually sees - and
+    # pre_processor_kwargs() resizes to size * 448/392 first, so every size keeps the default
+    # 87.5% field of view. (Passing only image_size used to leave the crop stuck at 392.)
+    "dinomaly": {"kind": "divisor", "divisor": 14, "default": 392, "resize_over_crop": 448 / 392},
+    "inpformer": {"kind": "divisor", "divisor": 14, "default": 392, "resize_over_crop": 448 / 392},
     # architecture is locked to one resolution; image_size cannot meaningfully change
     "fre": {"kind": "fixed", "value": 256, "default": 256},
     "uflow": {"kind": "fixed", "value": 448, "default": 448},
@@ -195,6 +198,17 @@ def validate_image_size(model: str, height: int, width: int) -> str | None:
             f"matching its known constraints is {valid_value}. This may fail once training actually starts."
         )
     return None
+
+
+def pre_processor_kwargs(model: str, height: int, width: int) -> dict:
+    """Arguments for `ModelClass.configure_pre_processor` that make the model's input
+    height x width. For most models that is just image_size; models whose pre-processor
+    crops after resizing ("resize_over_crop") also need the crop scaled to match."""
+    scale = MODEL_IMAGE_SIZE_RULES.get(model, {}).get("resize_over_crop")
+    if scale and height == width:
+        resize = round(height * scale)
+        return {"image_size": (resize, resize), "crop_size": height}
+    return {"image_size": (height, width)}
 
 
 def locked_image_size(model: str) -> int | None:
