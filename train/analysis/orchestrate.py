@@ -99,7 +99,7 @@ def generate_split_analysis(
             if not breakdown_df.empty:
                 breakdown_df.to_csv(analysis_dir / f"category_breakdown_{split_key}.csv", index=False)
             safe("defect breakdown chart", charts.chart_defect_breakdown, breakdown_df, figures_dir / f"defect_breakdown_{split_key}.png")
-            safe("defect score spread chart", charts.chart_defect_score_spread, df, figures_dir / f"defect_score_spread_{split_key}.png")
+            safe("defect score spread chart", charts.chart_defect_score_spread, df, threshold, figures_dir / f"defect_score_spread_{split_key}.png")
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"[analysis] Skipping defect breakdown ({split}): {exc}")
 

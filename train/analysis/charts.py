@@ -210,7 +210,7 @@ def chart_defect_breakdown(breakdown_df: pd.DataFrame, path: Path) -> None:
     save(fig, path)
 
 
-def chart_defect_score_spread(df: pd.DataFrame, path: Path) -> None:
+def chart_defect_score_spread(df: pd.DataFrame, threshold: float | None, path: Path) -> None:
     anomalous_types = sorted(df.loc[df["GT_Label"] == 1, "Defect_Type"].dropna().unique())
     if not anomalous_types:
         empty_chart(path, "No anomalous images in this split")
@@ -254,6 +254,10 @@ def chart_defect_score_spread(df: pd.DataFrame, path: Path) -> None:
         alpha=0.85,
         jitter=0.25,
     )
+    if threshold is not None and np.isfinite(threshold):
+        ax.axvline(threshold, color=CHROME["ink"], linestyle="--", linewidth=1.5, label="Threshold")
+        # Above the plot area so it can never cover a row of dots.
+        ax.legend(frameon=False, loc="lower right", bbox_to_anchor=(1.0, 1.0), borderaxespad=0.2, labelcolor=CHROME["ink_secondary"])
     ax.set_xlabel("Anomaly score (raw)")
     ax.set_ylabel("")
     ax.set_title("Score spread by defect type")
