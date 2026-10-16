@@ -59,9 +59,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         choices=["none", "from_dir", "synthetic"],
                         help="Override how the test set is derived (default: whatever the dataset class itself "
                              "defaults to).")
-    parser.add_argument("--test_split_ratio", type=float, default=None,
+    parser.add_argument("--test_split_ratio", type=float, default=0.3,
                         help="Fraction of normal training data pulled into the test set when the test directory "
-                             "has no normal images of its own. Ignored otherwise.")
+                             "has no normal images of its own (then halved with validation under the default "
+                             "val_split_mode). Default 0.3 instead of anomalib's 0.2, for larger val/test normal "
+                             "sets. Ignored when the test directory has its own normal images.")
 
     # Training params
     parser.add_argument("--max_epochs", type=int, default=999)
