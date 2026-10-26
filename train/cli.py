@@ -175,6 +175,9 @@ def main():
         # ratio 1.0 is the model's own default size: name it so it stands out among the ratio runs.
         prefix = "baseline" if args.image_size_ratio == 1.0 else "imgsize"
         output_path = output_path / f"{prefix}_{resolved_image_size}"
+    if args.seed is not None:
+        # Deepest level, so every seed of one model/size config sits side by side.
+        output_path = output_path / f"seed_{args.seed}"
     logger = setup_logger(output_path, args.model)
     logger.info(f"Experiment Args: {vars(args)}")
     if experiment_summary:
