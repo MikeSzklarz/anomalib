@@ -52,7 +52,6 @@ FULL_MODELS=(
     "dfm"
     "generalad"             # AUROC below random last run - likely a score-direction bug
     # --- No historical data on this dataset ---
-    "cfm"
     "foundad"
 )
 
@@ -81,7 +80,7 @@ declare -A MODEL_DURATION_MIN=(
     [l2bt]=13 [fastflow]=13 [reversedistillation]=12 [stfpm]=7 [fre]=7
     [anomalydino]=1 [dfkde]=1 [dfm]=1 [padim]=1 [patchcore]=1 [superadd]=1
 )
-DEFAULT_DURATION_MIN=5  # unknown/unprofiled models (e.g. anomalyvfm's last run errored before logging; cfm needs depth data)
+DEFAULT_DURATION_MIN=5  # unknown/unprofiled models (e.g. anomalyvfm's last run errored before logging)
 
 MODELS=()
 ZOO_SELECTION="small"

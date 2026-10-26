@@ -1,4 +1,0 @@
-# Needs a depth/xyz channel - won't run on 2D data. Official: 50 epochs at batch 4; no LR schedule, so early stopping + best is fine.
-trainer:
-  min_epochs: 50
-  max_epochs: 200

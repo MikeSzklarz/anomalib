@@ -113,14 +113,6 @@ def fetch(name: str, config_root: str | None) -> None:
         from anomalib.models.image.draem.lightning_model import DTD_DOWNLOAD_INFO
 
         ensure_dataset(Path(kwargs.get("dtd_dir", "./datasets/dtd")), DTD_DOWNLOAD_INFO)
-    if name == "cfm":  # a truncated Point-MAE file would be accepted as-is; drop it so it re-downloads
-        from anomalib.data.utils.download import generate_hash
-        from anomalib.models.image.cfm.components import POINTMAE_DOWNLOAD_INFO
-        from anomalib.utils.path import get_pretrained_weights_dir
-
-        weights = get_pretrained_weights_dir() / "pointmae" / "pointmae_pretrain.pth"
-        if weights.is_file() and generate_hash(weights, "sha256") != POINTMAE_DOWNLOAD_INFO.hashsum:
-            weights.unlink()
 
     model = MODEL_MAP[name](**kwargs)  # backbones download here
     if hasattr(model, "prepare_pretrained_model"):  # efficientad, dsr

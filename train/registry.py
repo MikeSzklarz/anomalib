@@ -9,7 +9,7 @@ from anomalib.data import (
 )
 
 from anomalib.models import (
-    AnomalyDINO, AnomalyVFM, CFM, Cfa, Cflow, Csflow, Dfkde, Dfm,
+    AnomalyDINO, AnomalyVFM, Cfa, Cflow, Csflow, Dfkde, Dfm,
     Dinomaly, Draem, Dsr, EfficientAd, Fastflow, FoundAD,
     Fre, Ganomaly, GeneralAD, Glass, InpFormer, L2BT, MHPatchcore, Padim, Patchcore, Patchflow,
     Rad, ReverseDistillation, Stfpm, SuperADD, Supersimplenet, Uflow, UniNet
@@ -18,7 +18,6 @@ from anomalib.models import (
 MODEL_MAP: Dict[str, Type] = {
     "anomalydino": AnomalyDINO,
     "anomalyvfm": AnomalyVFM,
-    "cfm": CFM,
     "cfa": Cfa,
     "cflow": Cflow,
     "csflow": Csflow,

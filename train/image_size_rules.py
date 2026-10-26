@@ -75,8 +75,6 @@ MODEL_IMAGE_SIZE_RULES = {
     "efficientad": {"kind": "divisor", "divisor": 1, "floor": 256, "default": 256},
     # irregular multi-scale coupling layers; no formula found, only a confirmed-safe set
     "csflow": {"kind": "safe_set", "values": [256, 384, 512, 640, 768], "default": 256},
-    # requires a depth/xyz channel alongside RGB (use with mvtec3d/adam3d); untested here
-    "cfm": {"kind": "free", "default": 224, "note": "requires depth data; unverified"},
 }
 
 
