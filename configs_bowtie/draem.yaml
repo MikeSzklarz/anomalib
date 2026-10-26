@@ -1,0 +1,4 @@
+# Fixed length (min = max): paper's 700 epochs; anomalib's LR drops are hard-coded at epochs 400 and 600. If --max_time can't fit it, use 450 (keeps the first drop).
+trainer:
+  min_epochs: 700
+  max_epochs: 700

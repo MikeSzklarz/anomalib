@@ -1,0 +1,4 @@
+# Near-constant LR: official 200 epochs with early stopping on pixel AUROC, patience 20.
+trainer:
+  min_epochs: 30
+  max_epochs: 200

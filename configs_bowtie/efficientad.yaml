@@ -1,5 +1,9 @@
+# Fixed length (min = max): paper's 70,000 steps at batch 1 = ~88 epochs x 795 images. anomalib's StepLR decay never fires (stepped per epoch).
 model:
   class_path: anomalib.models.EfficientAd
   init_args:
     padding: false
     pad_maps: false
+trainer:
+  min_epochs: 88
+  max_epochs: 88

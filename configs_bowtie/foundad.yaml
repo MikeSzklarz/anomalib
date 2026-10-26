@@ -1,0 +1,4 @@
+# Constant LR: official ~2,000 steps on 1-4 shots = ~80 epochs on full data at batch 32. Recommended patience 20.
+trainer:
+  min_epochs: 40
+  max_epochs: 120

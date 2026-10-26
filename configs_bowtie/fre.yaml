@@ -1,0 +1,4 @@
+# Constant LR: anomalib's 220 epochs. Recommended patience 20.
+trainer:
+  min_epochs: 20
+  max_epochs: 220

@@ -1,0 +1,4 @@
+# Constant LR: paper's 100 epochs (SGD 0.4, batch 32). Recommended patience 20.
+trainer:
+  min_epochs: 30
+  max_epochs: 100

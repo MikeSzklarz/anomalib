@@ -1,0 +1,4 @@
+# Fixed length (min = max): official code and anomalib's config both train 200 epochs and evaluate the final one.
+trainer:
+  min_epochs: 200
+  max_epochs: 200
