@@ -88,6 +88,9 @@ class RawDataExtractionCallback(Callback):
         self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
         self.compact = compact
+        # False: still compute the per-image pixel stats, but don't keep or write the arrays
+        # (raw_outputs/ is only produced for the primary checkpoint).
+        self.save_arrays = True
 
         self._image_names: list[str] = []
         self._anomaly_maps: list[np.ndarray] = []  # raw, model-native scale
@@ -167,20 +170,23 @@ class RawDataExtractionCallback(Callback):
                 if anomaly_map is not None:
                     raw_np = anomaly_map[i].detach().cpu().numpy().squeeze().astype(np.float32)  # model-native scale
                     norm_np = normalized_map[i].detach().cpu().numpy().squeeze()  # [0, 1]
-                    self._anomaly_maps.append(raw_np)
+                    if self.save_arrays:
+                        self._anomaly_maps.append(raw_np)
                     row["Max_Score_In_Map"] = float(norm_np.max())
                     row["Mean_Score_In_Map"] = float(norm_np.mean())
                     row["P95_Score_In_Map"] = float(np.percentile(norm_np, 95))
 
                 if pred_mask is not None:
                     pred_bool = pred_mask[i].detach().cpu().numpy().squeeze().astype(bool)
-                    self._pred_masks.append(pred_bool.astype(np.uint8))
+                    if self.save_arrays:
+                        self._pred_masks.append(pred_bool.astype(np.uint8))
                     row["Anomalous_Pixel_Count"] = int(pred_bool.sum())
                     row["Anomalous_Pixel_Pct"] = 100.0 * float(pred_bool.mean())
 
                 if gt_mask is not None:
                     gt_bool = gt_mask[i].detach().cpu().numpy().squeeze() > 0.5
-                    self._gt_masks.append(gt_bool.astype(np.uint8))
+                    if self.save_arrays:
+                        self._gt_masks.append(gt_bool.astype(np.uint8))
 
                 if pred_bool is not None and gt_bool is not None:
                     intersection = int(np.logical_and(pred_bool, gt_bool).sum())
@@ -197,7 +203,7 @@ class RawDataExtractionCallback(Callback):
                 self._pixel_rows.append(row)
 
     def _write_arrays(self) -> None:
-        if not self._image_names:
+        if not self._image_names or not self.save_arrays:
             return
 
         raw_out_dir = self.output_path / "raw_outputs" / self.subfolder

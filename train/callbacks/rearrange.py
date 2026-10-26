@@ -14,6 +14,10 @@ class RearrangeVisualizationsCallback(Callback):
         self.subfolder = subfolder
         self.logger = logger or logging.getLogger("train_script")
         self.model_name = model_name
+        # Where the visualizer writes its images (None: search trainer.default_root_dir), and
+        # whether to sort them at all - off for passes that write no images (non-primary checkpoint).
+        self.images_dir: Path | None = None
+        self.move_images = True
         self.preds_stats = []
         self.predictions_by_split: dict[str, pd.DataFrame] = {}
         self.thresholds_by_split: dict[str, float] = {}
@@ -51,6 +55,9 @@ class RearrangeVisualizationsCallback(Callback):
         all_scores = torch.cat([x[1] for x in self.preds_stats])
         all_paths = []
         for x in self.preds_stats: all_paths.extend(x[2])
+        # Cleared here, not at the end: the image-rearrangement part below has early returns, and
+        # anything left over would leak into the next split's predictions.
+        self.preds_stats = []
 
         # IMPORTANT: pred_score captured in on_test_batch_end is RAW (model-native scale).
         # Reason: PostProcessor is a model callback and is appended AFTER trainer callbacks
@@ -161,7 +168,12 @@ class RearrangeVisualizationsCallback(Callback):
             self.logger.error(f"[{self.subfolder.upper()}] Failed to build predictions dataframe: {e}")
 
         # Image Rearrangement
-        base_search_dir = Path(trainer.default_root_dir)
+        if not self.move_images:
+            return
+        base_search_dir = self.images_dir or Path(trainer.default_root_dir)
+        if not base_search_dir.is_dir():
+            self.logger.warning(f"Image folder {base_search_dir} does not exist. Skipping rearrangement for {self.subfolder}.")
+            return
         sample_file_name = Path(all_paths[0]).name
         found_files = list(base_search_dir.rglob(sample_file_name))
         vis_candidates = [f for f in found_files if "images" in str(f.parent) and "results" in str(f)]
@@ -255,4 +267,3 @@ class RearrangeVisualizationsCallback(Callback):
                 _remove_empty_dirs(item)
 
         self.logger.info(f"Reorganization complete. Updated {moved_count} images in '{self.subfolder}'.")
-        self.preds_stats = []

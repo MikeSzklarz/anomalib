@@ -1,8 +1,9 @@
 """Top-level orchestration: wires metrics.py's computations to charts.py's
-rendering for every split, then for the whole run. Called once from
-train.pipeline after all test/val/contamination passes complete.
+rendering for every split, then for the whole run. Called from train.pipeline
+after all test/val/contamination passes complete, once per evaluated checkpoint
+(last/best), with charts only for the primary one.
 
-Runs once per train invocation. Everything here is derived from data already
+Everything here is derived from data already
 collected by the callbacks (predictions, per-image pixel stats, epoch metrics)
 - no extra model inference happens in this module.
 """
@@ -42,17 +43,22 @@ def generate_split_analysis(
     df: pd.DataFrame,
     threshold: float | None,
     per_image_stats: pd.DataFrame | None = None,
+    make_charts: bool = True,
 ) -> dict[str, Any]:
     """Compute + chart everything derivable from one split's predictions.
 
     Returns a small summary dict (auroc, aupr, etc.) for inclusion elsewhere.
     Never raises - any failure is logged and skipped so a plotting bug can
-    never take down an expensive training run.
+    never take down an expensive training run. make_charts=False still writes
+    the JSON/CSV data, just none of the PNGs.
     """
     split_key = split.lower()
     summary: dict[str, Any] = {}
 
     def safe(name: str, fn, *args, **kwargs) -> None:
+        # Only ever wraps chart rendering, so this is the single place charts get skipped.
+        if not make_charts:
+            return
         try:
             fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001
@@ -175,16 +181,21 @@ def run_post_test_analysis(
     split_counts: dict[str, dict[str, int]],
     epoch_df: pd.DataFrame | None,
     resource_df: pd.DataFrame | None = None,
+    make_charts: bool = True,
 ) -> dict[str, Any]:
-    """Top-level entry point called from train.pipeline after all test passes finish.
+    """Top-level entry point called from train.pipeline after all test passes finish,
+    once per evaluated checkpoint (output_path is that checkpoint's folder).
 
     Wrapped in try/except at the call site as well - this function itself is
     defensive per-split, but a hard failure here must never fail the run.
+    make_charts=False (the non-primary checkpoint) skips every PNG, including the
+    run-level ones, and keeps the JSON/CSV data.
     """
     analysis_dir = output_path / "analysis"
     figures_dir = analysis_dir / "figures"
     analysis_dir.mkdir(parents=True, exist_ok=True)
-    figures_dir.mkdir(parents=True, exist_ok=True)
+    if make_charts:
+        figures_dir.mkdir(parents=True, exist_ok=True)
 
     summaries: dict[str, Any] = {}
     for split, df in predictions_by_split.items():
@@ -195,9 +206,11 @@ def run_post_test_analysis(
             df,
             thresholds_by_split.get(split),
             per_image_stats_by_split.get(split),
+            make_charts=make_charts,
         )
 
-    generate_run_level_analysis(analysis_dir, figures_dir, split_counts, epoch_df, resource_df)
+    if make_charts:
+        generate_run_level_analysis(analysis_dir, figures_dir, split_counts, epoch_df, resource_df)
 
     _write_json(summaries, analysis_dir / "summary.json")
     return summaries

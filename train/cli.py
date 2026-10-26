@@ -83,7 +83,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     # Export & Saving
     parser.add_argument("--export_types", nargs="+", default=[], choices=["torch", "openvino", "onnx"])
-    parser.add_argument("--no_checkpoint", action="store_true")
+    parser.add_argument("--no_checkpoint", action="store_true",
+                        help="Don't keep best.ckpt/last.ckpt: both live in a temp dir that is deleted after evaluation.")
+    parser.add_argument("--primary_checkpoint", type=str, default="last", choices=["last", "best"],
+                        help="Both the last and best epochs are evaluated on test (and val with --eval_val_test). "
+                             "The primary one also gets images, raw_outputs arrays, analysis charts, the "
+                             "contamination check and export; the other gets predictions, metrics and the "
+                             "analysis data files only.")
     parser.add_argument("--image_size", type=int, nargs="+", default=None)
     parser.add_argument("--image_size_ratio", type=float, default=None,
                         help="Scale this model's own baseline default image_size by this ratio "
