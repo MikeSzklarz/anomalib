@@ -70,7 +70,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min_epochs", type=int, default=15)
     parser.add_argument("--patience", type=int, default=20,
                         help="Epochs without improvement before early stopping. The best epoch is restored "
-                             "afterwards, so a longer patience only costs time, not accuracy.")
+                             "afterwards, so a longer patience only costs time, not accuracy. A model's "
+                             "config `trainer.patience` overrides this.")
     parser.add_argument("--max_time", type=str, default="05:00:00",
                         help="Wall-clock cap on TRAINING, as HH:MM:SS or D:HH:MM:SS (default 05:00:00, sized for "
                              "the 6h SLURM jobs). When hit, training stops (even before min_epochs) and the run "

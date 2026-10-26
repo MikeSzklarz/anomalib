@@ -49,8 +49,12 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
     resource_cb = None if args.disable_resource_monitor else ResourceMonitorCallback(output_path=output_path, logger=logger)
 
     monitor_mode = "max" if "loss" not in monitor_metric else "min"
+    # Like min/max_epochs, a model's yaml `trainer.patience` wins over the --patience flag.
+    patience = trainer_config.get("patience", args.patience)
+    if patience != args.patience:
+        logger.info(f"[early_stopping] Using config patience {patience} (overrides --patience {args.patience}).")
     callbacks = [
-        EarlyStopping(monitor=monitor_metric, mode=monitor_mode, patience=args.patience, verbose=True),
+        EarlyStopping(monitor=monitor_metric, mode=monitor_mode, patience=patience, verbose=True),
         file_logging_cb,
         rearrange_cb,
         raw_data_cb,
@@ -169,7 +173,7 @@ def run(
         checkpoint_selection["effective_epochs"] = {
             "min_epochs": (trainer_config or {}).get("min_epochs", args.min_epochs),
             "max_epochs": engine.trainer.max_epochs,
-            "patience": args.patience,
+            "patience": (trainer_config or {}).get("patience", args.patience),
             "max_time": args.max_time,
         }
 
