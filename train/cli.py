@@ -72,10 +72,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         help="Epochs without improvement before early stopping. The best epoch is restored "
                              "afterwards, so a longer patience only costs time, not accuracy. A model's "
                              "config `trainer.patience` overrides this.")
-    parser.add_argument("--max_time", type=str, default="05:00:00",
-                        help="Wall-clock cap on TRAINING, as HH:MM:SS or D:HH:MM:SS (default 05:00:00, sized for "
-                             "the 6h SLURM jobs). When hit, training stops (even before min_epochs) and the run "
-                             "continues to restore-best/test/val/contamination/export. 'none' disables it.")
+    parser.add_argument("--max_time", type=str, default="09:00:00",
+                        help="Wall-clock cap on TRAINING, as HH:MM:SS or D:HH:MM:SS (default 09:00:00, leaving room "
+                             "within run_slurm.sh's 24h job for evaluating both checkpoints). When hit, training stops "
+                             "(even before min_epochs) and the run continues to the last/best test/val/contamination "
+                             "passes and export. 'none' disables it.")
     parser.add_argument("--task", type=str, default="segmentation", choices=["classification", "segmentation", "detection"])
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=int, default=1)
