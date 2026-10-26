@@ -1,4 +1,5 @@
-# Constant LR: official 640 epochs, capped at 300 to fit --max_time; our batch 16 (~50 steps/epoch) matches the official ~49. Authors keep the best epoch. Recommended patience 50.
+# Constant LR: official 640 epochs, capped at 300 to fit --max_time; our batch 16 (~50 steps/epoch) matches the official ~49. Authors keep the best epoch.
 trainer:
   min_epochs: 100
   max_epochs: 300
+  patience: 50

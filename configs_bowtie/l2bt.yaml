@@ -1,4 +1,5 @@
-# Constant LR: official 50 epochs at batch 4 (~10k steps) = ~400 epochs at batch 32. Recommended patience 40.
+# Constant LR: official 50 epochs at batch 4 (~10k steps) = ~400 epochs at batch 32.
 trainer:
   min_epochs: 50
   max_epochs: 400
+  patience: 40

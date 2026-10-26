@@ -1,4 +1,5 @@
-# Constant LR: anomalib's 50 epochs; each epoch runs many fiber-batch optimizer steps, so it's expensive. Recommended patience 10.
+# Constant LR: anomalib's 50 epochs; each epoch runs many fiber-batch optimizer steps, so it's expensive.
 trainer:
   min_epochs: 15
   max_epochs: 50
+  patience: 10

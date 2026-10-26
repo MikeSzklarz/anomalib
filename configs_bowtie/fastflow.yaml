@@ -1,4 +1,5 @@
-# Constant LR: paper's 500 epochs; flows often peak early, so the best checkpoint matters. Recommended patience 30.
+# Constant LR: paper's 500 epochs; flows often peak early, so the best checkpoint matters.
 trainer:
   min_epochs: 50
   max_epochs: 500
+  patience: 30

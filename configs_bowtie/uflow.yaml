@@ -2,3 +2,4 @@
 trainer:
   min_epochs: 30
   max_epochs: 200
+  patience: 20

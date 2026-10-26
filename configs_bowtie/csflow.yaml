@@ -1,4 +1,5 @@
-# Constant LR: official 4 meta x 60 sub = 240 epochs, evaluated every 60. Recommended patience 30.
+# Constant LR: official 4 meta x 60 sub = 240 epochs, evaluated every 60.
 trainer:
   min_epochs: 60
   max_epochs: 240
+  patience: 30

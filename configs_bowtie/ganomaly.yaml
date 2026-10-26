@@ -1,4 +1,5 @@
-# Constant LR: official 15 epochs; GAN training oscillates, so keep the best epoch. Recommended patience 20.
+# Constant LR: official 15 epochs; GAN training oscillates, so keep the best epoch.
 trainer:
   min_epochs: 15
   max_epochs: 100
+  patience: 20
