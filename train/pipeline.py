@@ -53,7 +53,7 @@ _HEADLINE_METRICS = ("image_AUROC", "pixel_AUROC", "image_F1Max", "pixel_F1Max",
 
 
 def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dict[str, Any]):
-    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb)."""
+    """Returns (engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb, last_ckpt_cb)."""
     tb_logger = AnomalibTensorBoardLogger(save_dir=str(output_path), name="tensorboard_logs", version="")
 
     rearrange_cb = RearrangeVisualizationsCallback(output_path=output_path, subfolder="test", logger=logger, model_name=args.model)
@@ -90,11 +90,19 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         logger.info("[checkpoint] --no_checkpoint set: best/last epochs are kept in a temp dir only, deleted after evaluation.")
     else:
         ckpt_dir = output_path / "weights" / "lightning"
+    # Two callbacks, not save_last=True: in recent Lightning (2.6.x) save_last only writes last.ckpt on
+    # epochs that also produce a new best, so it always ended up the same epoch as best.ckpt.
+    # monitor=None + save_top_k=1 overwrites last.ckpt on every validated epoch instead.
+    # best is listed first so trainer.checkpoint_callback (Engine.best_model_path) stays the best one.
     ckpt_cb = ModelCheckpoint(
         dirpath=ckpt_dir, filename="best", monitor=monitor_metric, mode=monitor_mode,
-        save_top_k=1, save_last=True, auto_insert_metric_name=False,
+        save_top_k=1, auto_insert_metric_name=False,
     )
-    callbacks.append(ckpt_cb)
+    last_ckpt_cb = ModelCheckpoint(
+        dirpath=ckpt_dir, filename="last", monitor=None, save_top_k=1,
+        save_on_train_epoch_end=False, auto_insert_metric_name=False,
+    )
+    callbacks.extend([ckpt_cb, last_ckpt_cb])
 
     engine = Engine(
         callbacks=callbacks, logger=tb_logger,
@@ -103,7 +111,7 @@ def _build_engine(args, monitor_metric, logger, output_path, trainer_config: Dic
         accelerator=args.accelerator, devices=args.devices,
         default_root_dir=str(output_path),
     )
-    return engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb
+    return engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb, last_ckpt_cb
 
 
 def _read_checkpoint(path: str | Path) -> Dict[str, Any]:
@@ -111,7 +119,7 @@ def _read_checkpoint(path: str | Path) -> Dict[str, Any]:
     return torch.load(path, map_location="cpu", weights_only=False, mmap=True)
 
 
-def _resolve_checkpoints(engine, ckpt_cb, monitor_metric: str, args, logger) -> Dict[str, Any]:
+def _resolve_checkpoints(engine, ckpt_cb, last_ckpt_cb, monitor_metric: str, args, logger) -> Dict[str, Any]:
     """Works out which epochs last.ckpt and best.ckpt hold, whether they are the same epoch,
     and which one is primary. Returns the checkpoint_selection block for manifest.json."""
     epochs_trained = int(engine.trainer.current_epoch)
@@ -127,7 +135,8 @@ def _resolve_checkpoints(engine, ckpt_cb, monitor_metric: str, args, logger) -> 
         stop_reason = "max_epochs"  # the trainer's or the model's own (e.g. single-pass models)
 
     checkpoints: Dict[str, Dict[str, Any]] = {}
-    for name, path in (("last", ckpt_cb.last_model_path), ("best", ckpt_cb.best_model_path)):
+    # last_ckpt_cb has no monitor, so its "best" path is simply the most recently saved epoch.
+    for name, path in (("last", last_ckpt_cb.best_model_path), ("best", ckpt_cb.best_model_path)):
         if path and Path(path).is_file():
             checkpoints[name] = {"available": True, "source": "file", "path": str(path),
                                  "epoch": int(_read_checkpoint(path)["epoch"]), "identical_to": None}
@@ -328,7 +337,7 @@ def run(
     target_w: int | None,
     trainer_config: Dict[str, Any] | None = None,
 ) -> None:
-    engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb = _build_engine(
+    engine, rearrange_cb, raw_data_cb, file_logging_cb, resource_cb, ckpt_cb, last_ckpt_cb = _build_engine(
         args, monitor_metric, logger, output_path, trainer_config or {},
     )
 
@@ -409,7 +418,7 @@ def run(
         fit_start = time.time()
         engine.fit(model=model, datamodule=datamodule)
         durations_sec["fit"] = time.time() - fit_start
-        checkpoint_selection = _resolve_checkpoints(engine, ckpt_cb, monitor_metric, args, logger)
+        checkpoint_selection = _resolve_checkpoints(engine, ckpt_cb, last_ckpt_cb, monitor_metric, args, logger)
         # The epoch limits that actually applied: config values win over the CLI flags, and the
         # model's own trainer_arguments (e.g. max_epochs=1 for single-pass models) win over both.
         checkpoint_selection["effective_epochs"] = {
