@@ -103,7 +103,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                                  "reinhard_clahe", "desaturate", "grayscale_3ch",
                                  "viridis", "composite"],
                         help="Inline color preprocessing applied before ImageNet normalization.")
-    parser.add_argument("--export_paths", action="store_true")
+    parser.add_argument("--export_paths", action=argparse.BooleanOptionalAction, default=True,
+                        help="Write dataset_splits.csv (each image's train/val/test split) to the run folder "
+                             "before training starts. On by default; --no-export_paths turns it off.")
     parser.add_argument("--compact_raw_outputs", action="store_true",
                         help="Quantize raw_outputs/<split>/arrays.npz anomaly maps to uint8 instead of "
                              "float16 (~10x smaller, ~0.2%% of the value range in max quantization error). "
