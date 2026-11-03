@@ -11,6 +11,8 @@ Run folder layout:
                                 (--primary_checkpoint, default last) also gets raw_outputs/<split>/,
                                 images/, analysis/figures/ and the contamination check
     weights/lightning/          last.ckpt, best.ckpt (exports go to weights/, from the primary)
+    exclusion/                  only with --exclude_list: the list used, excluded_samples.csv,
+                                exclusion_summary.json, <ckpt>_predictions.csv (see exclusion.py)
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from .callbacks import (
     TrainingTimeLimitCallback,
 )
 from .callbacks.time_limit import parse_max_time
+from .exclusion import TrainOnlyExclusion
 from .utils import dir_size_bytes, get_git_commit
 
 CHECKPOINT_NAMES = ("last", "best")
@@ -217,9 +220,13 @@ def _images_disabled(model):
         del visualizer.on_test_batch_end
 
 
-def _write_checkpoint_outputs(out_dir: Path, result: Dict[str, Any], logger) -> Dict[str, pd.DataFrame]:
+def _write_checkpoint_outputs(
+    out_dir: Path, result: Dict[str, Any], logger, exclusion: TrainOnlyExclusion | None = None,
+) -> Dict[str, pd.DataFrame]:
     """predictions.csv, raw_outputs/<split>/index.csv and analysis/per_image_stats.csv for one
-    checkpoint's folder. Returns per_image_stats_by_split for the analysis step."""
+    checkpoint's folder. Returns per_image_stats_by_split for the analysis step. With an
+    exclusion list, predictions.csv gets an In_Exclusion_List column and the listed images'
+    rows are also written to <run>/exclusion/<checkpoint>_predictions.csv."""
     out_dir.mkdir(parents=True, exist_ok=True)
     predictions_by_split: Dict[str, pd.DataFrame] = result["predictions"]
 
@@ -235,8 +242,16 @@ def _write_checkpoint_outputs(out_dir: Path, result: Dict[str, Any], logger) -> 
             tagged = split_df.copy()
             tagged.insert(0, "Split", split_name.capitalize())
             combined_frames.append(tagged)
-        pd.concat(combined_frames, ignore_index=True).to_csv(out_dir / "predictions.csv", index=False)
+        combined = pd.concat(combined_frames, ignore_index=True)
+        if exclusion is not None:
+            combined = exclusion.tag(combined)
+        combined.to_csv(out_dir / "predictions.csv", index=False)
         logger.info(f"Exported consolidated predictions CSV to: {out_dir / 'predictions.csv'}")
+        if exclusion is not None:
+            try:
+                exclusion.write_checkpoint_predictions(out_dir.parent, out_dir.name, combined)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[exclusion] Failed to write {out_dir.name}_predictions.csv (non-fatal): {e}")
 
     # ---------------------------------------------------------------------
     # raw_outputs/<split>/index.csv - the same per-split predictions slice,
@@ -328,6 +343,7 @@ def run(
     filtered_kwargs: Dict[str, Any],
     exclude_files: set,
     dataset_stats: Dict[str, Any],
+    exclusion: TrainOnlyExclusion | None = None,
     monitor_metric: str,
     logger,
     output_path: Path,
@@ -403,6 +419,10 @@ def run(
                 contamination_loader, pool_size = dataset_model_setup.build_contamination_datamodule(
                     args, DataClass, filtered_kwargs, exclude_files, datamodule, logger,
                 )
+                if exclusion is not None:
+                    logger.info(f"[exclusion] Contamination pass is not filtered: it scores all {pool_size} normal "
+                                f"images, including the {len(exclusion.removed_image_names)} removed from train "
+                                f"(never trained on) and the listed val/test ones.")
                 result["contamination_pool_size"] = pool_size
                 run_pass("contamination", pool_size, dataloaders=contamination_loader)
 
@@ -418,6 +438,13 @@ def run(
         fit_start = time.time()
         engine.fit(model=model, datamodule=datamodule)
         durations_sec["fit"] = time.time() - fit_start
+        if exclusion is not None:
+            # trainer.fit re-ran setup() (a fresh split + removal), so refresh the summary with the
+            # split that was actually trained on and the cross-call stability check.
+            exclusion.write_outputs(output_path)
+            stable = "identical to" if exclusion.split_stable else "DIFFERENT from"
+            logger.info(f"[exclusion] After fit: {exclusion.setup_calls} setup() calls; the split trained on is "
+                        f"{stable} the one logged before training.")
         checkpoint_selection = _resolve_checkpoints(engine, ckpt_cb, last_ckpt_cb, monitor_metric, args, logger)
         # The epoch limits that actually applied: config values win over the CLI flags, and the
         # model's own trainer_arguments (e.g. max_epochs=1 for single-pass models) win over both.
@@ -516,7 +543,7 @@ def run(
         _log_checkpoint_comparison(logger, checkpoint_selection, metrics_json)
 
         per_image_stats: Dict[str, Dict[str, pd.DataFrame]] = {
-            name: _write_checkpoint_outputs(output_path / name, res, logger) for name, res in results.items()
+            name: _write_checkpoint_outputs(output_path / name, res, logger, exclusion) for name, res in results.items()
         }
 
         # ---------------------------------------------------------------------
@@ -583,6 +610,7 @@ def run(
                 "args": vars(args),
                 "experiment_file": experiment_summary,
                 "dataset_stats": dataset_stats,
+                "exclusion": exclusion.summary() if exclusion is not None else None,
                 "timestamps": {"start": run_started_at.isoformat(), "end": run_ended_at.isoformat()},
                 "checkpoint_selection": checkpoint_selection,
                 "durations_sec": durations_sec,

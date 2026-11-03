@@ -22,6 +22,7 @@ DEFAULT_TEXT_CONFIG["enable"] = False
 from . import pipeline
 from . import setup as dataset_model_setup
 from .callbacks.time_limit import parse_max_time
+from .exclusion import TrainOnlyExclusion
 from .image_size import get_resize_target, log_image_size_analysis
 from .image_size_rules import MODEL_IMAGE_SIZE_RULES, locked_image_size, resolve_from_ratio, validate_image_size
 from .registry import DATASET_MAP, MODEL_MAP
@@ -46,7 +47,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root_dir", type=str, default="./datasets")
     parser.add_argument("--category", type=str, default="")
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--exclude_root", type=str, default=None, help="Directory containing CSV/TXT files of images to exclude per model.")
+    parser.add_argument("--exclude_root", type=str, default=None,
+                        help="Directory containing CSV/TXT files of images to exclude per model. Removes them "
+                             "BEFORE the split, so every split differs from a run without it. See --exclude_list.")
+    parser.add_argument("--exclude_list", type=str, default=None,
+                        help="TXT file of images to remove from TRAIN only, one per line, as a file name "
+                             "(T0127_030.jpg) or a path relative to the dataset root (good/T0127_030.jpg). The "
+                             "split is computed on all images first, so with the same seed it matches a run "
+                             "without the list; listed val/test images are kept and tagged In_Exclusion_List "
+                             "in predictions.csv. Outputs go to <run>/exclusion/. Mutually exclusive with "
+                             "--exclude_root.")
     parser.add_argument("--val_split_mode", type=str, default=None,
                         choices=["none", "same_as_test", "from_train", "from_test", "synthetic", "from_dir"],
                         help="Override how the validation set is derived (default: whatever the dataset class "
@@ -154,6 +164,11 @@ def _validate_args(args, parser: argparse.ArgumentParser) -> None:
         parser.error(f"--dataset is required and must be one of {sorted(DATASET_MAP)} (via --dataset or --experiment)")
     if args.image_size and args.image_size_ratio is not None:
         parser.error("--image_size and --image_size_ratio are mutually exclusive.")
+    if args.exclude_root and args.exclude_list:
+        parser.error("--exclude_root (remove before the split) and --exclude_list (remove from train after "
+                     "the split) are mutually exclusive.")
+    if args.exclude_list and not Path(args.exclude_list).is_file():
+        parser.error(f"--exclude_list file not found: {args.exclude_list}")
     if args.max_time is not None and args.max_time.lower() == "none":
         args.max_time = None
     if args.max_time is not None:
@@ -242,9 +257,10 @@ def main():
     yaml_config = load_yaml_config(config_path) if config_path else {}
 
     exclude_files = dataset_model_setup.load_exclusion_files(args, logger)
+    exclusion = TrainOnlyExclusion(args.exclude_list, logger) if args.exclude_list else None
 
     datamodule, dataset_stats, filtered_kwargs, DataClass = dataset_model_setup.build_datamodule(
-        args, yaml_config, exclude_files, logger, output_path,
+        args, yaml_config, exclude_files, logger, output_path, exclusion=exclusion,
     )
 
     if target_h and target_w:
@@ -259,6 +275,7 @@ def main():
         DataClass=DataClass,
         filtered_kwargs=filtered_kwargs,
         exclude_files=exclude_files,
+        exclusion=exclusion,
         dataset_stats=dataset_stats,
         monitor_metric=monitor_metric,
         logger=logger,

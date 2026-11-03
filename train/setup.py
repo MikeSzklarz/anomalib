@@ -1,7 +1,8 @@
 """Dataset and model construction.
 
 build_datamodule() turns CLI args + yaml config into a ready-to-use datamodule
-(handling the exclusion-list monkeypatch and per-dataset special-casing),
+(handling the exclusion-list monkeypatches - --exclude_root before the split,
+--exclude_list from train only after it, see exclusion.py - and per-dataset special-casing),
 build_contamination_datamodule() builds the secondary "scan everything labeled
 normal" datamodule used by --check_contamination, and build_model() turns them
 into a configured AnomalibModule + the metric name to monitor for early stopping.
@@ -21,6 +22,7 @@ from torchvision.transforms import v2
 from anomalib.data.utils.split import TestSplitMode, ValSplitMode
 from anomalib.metrics import AUPR, AUROC, Evaluator, F1Max, F1Score
 
+from . import exclusion as exclusion_module
 from .image_size_rules import pre_processor_kwargs
 from .registry import DATASET_MAP, MODEL_MAP
 from .utils import get_init_args
@@ -67,12 +69,14 @@ def load_exclusion_files(args, logger) -> Set[str]:
     return exclude_files
 
 
-def _log_dataset_details(datamodule, logger, export_paths=False, output_path=None):
+def _log_dataset_details(datamodule, logger, export_paths=False, output_path=None, exclusion=None):
     """Logs detailed stats and checks for TRUE data leakage using full paths.
 
     Returns a JSON-serializable dict of the same split counts and overlap
     results that get logged, for use in manifest.json and the split
-    composition chart.
+    composition chart. With a train-only exclusion list, the counts are after
+    removal, and dataset_splits.csv still lists the removed train images
+    (Removed_From_Train=True) so it can be diffed against a run without the list.
     """
     logger.info("Setting up datamodule to inspect splits...")
 
@@ -125,6 +129,13 @@ def _log_dataset_details(datamodule, logger, export_paths=False, output_path=Non
                     path_obj = Path(f)
                     short_name = f"{path_obj.parent.name}/{path_obj.name}"
                     csv_data.append({"Image_Name": short_name, "Split": split_name})
+
+            if exclusion is not None:
+                listed, removed = exclusion.listed_image_names, exclusion.removed_image_names
+                csv_data.extend({"Image_Name": name, "Split": "Train"} for name in sorted(removed))
+                for row in csv_data:
+                    row[exclusion_module.FLAG_COLUMN] = row["Image_Name"] in listed
+                    row["Removed_From_Train"] = row["Split"] == "Train" and row["Image_Name"] in removed
 
             try:
                 df = pd.DataFrame(csv_data)
@@ -203,8 +214,13 @@ def _apply_exclusion_monkeypatch(datamodule, exclude_files: Set[str], logger, co
 
 def build_datamodule(
     args, yaml_config: Dict[str, Any], exclude_files: Set[str], logger, output_path: Path,
+    exclusion: "exclusion_module.TrainOnlyExclusion | None" = None,
 ) -> Tuple[Any, Dict[str, Any], Dict[str, Any], Type]:
-    """Returns (datamodule, dataset_stats, filtered_kwargs, DataClass)."""
+    """Returns (datamodule, dataset_stats, filtered_kwargs, DataClass).
+
+    exclude_files (--exclude_root) are dropped BEFORE the split; exclusion (--exclude_list)
+    drops its images from train AFTER the split, leaving the split itself unchanged.
+    """
     logger.info(f"Initializing DataModule: {args.dataset}")
     DataClass = DATASET_MAP[args.dataset]
     dataset_kwargs = get_init_args(yaml_config, "data")
@@ -293,8 +309,17 @@ def build_datamodule(
             _apply_exclusion_monkeypatch(datamodule, exclude_files, logger)
         # ==============================================================================
 
+        # --exclude_list: wraps setup() itself, so removal happens AFTER the split.
+        if exclusion is not None:
+            exclusion.attach(datamodule)
+
         # This triggers datamodule.setup() which now calls our injected code!
-        dataset_stats = _log_dataset_details(datamodule, logger, export_paths=args.export_paths, output_path=output_path)
+        dataset_stats = _log_dataset_details(
+            datamodule, logger, export_paths=args.export_paths, output_path=output_path, exclusion=exclusion,
+        )
+
+        if exclusion is not None:
+            exclusion.write_outputs(output_path)
 
     except Exception as e:
         logger.error(f"DataModule Error: {e}")
