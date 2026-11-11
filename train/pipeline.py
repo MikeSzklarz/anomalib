@@ -13,6 +13,9 @@ Run folder layout:
     weights/lightning/          last.ckpt, best.ckpt (exports go to weights/, from the primary)
     exclusion/                  only with --exclude_list: the list used, excluded_samples.csv,
                                 exclusion_summary.json, <ckpt>_predictions.csv (see exclusion.py)
+    last/holdout/, best/holdout/  only if <root_dir>/holdout/ exists (train/holdout.py):
+                                predictions.csv, summary.csv, per_image_stats.csv, and for the
+                                primary raw_outputs/<group>/ - unlabelled, kept apart from the splits
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from anomalib.deploy import ExportType
 from anomalib.engine import Engine
 from anomalib.loggers import AnomalibTensorBoardLogger
 
+from . import holdout
 from . import setup as dataset_model_setup
 from .analysis.orchestrate import run_post_test_analysis
 from .callbacks import (
@@ -361,6 +365,28 @@ def run(
     durations_sec: Dict[str, Any] = {}
     throughput_images_per_sec: Dict[str, Any] = {}
 
+    # <root_dir>/holdout/<group>/ images get predictions after each checkpoint's evaluation
+    # (see train/holdout.py). Nothing to do for datasets without that folder.
+    holdout_groups: Dict[str, Any] = {}
+    holdout_manifest: Dict[str, Any] | None = None
+    if getattr(args, "holdout", True):
+        try:
+            holdout_groups = holdout.discover_holdout(args.root_dir, use_masks=args.task == "segmentation", logger=logger)
+            if holdout_groups:
+                holdout_manifest = {
+                    "root": str(Path(args.root_dir) / holdout.HOLDOUT_DIRNAME),
+                    "masks_used": args.task == "segmentation",
+                    "groups": holdout.describe_groups(holdout_groups),
+                    "file_name_overlap": holdout.check_overlap(holdout_groups, datamodule, logger),
+                    "checkpoints": {},
+                }
+                for group, info in holdout_manifest["groups"].items():
+                    logger.info(f"[holdout] Found group '{group}': {info['images']} images, {info['gt_masks']} masks, "
+                                f"classes {info['classes']}")
+        except Exception as e:  # noqa: BLE001
+            holdout_groups = {}
+            logger.error(f"[holdout] Discovery failed (non-fatal, holdout skipped): {e}")
+
     def evaluate(name: str, primary: bool) -> Dict[str, Any]:
         """Test (+ val with --eval_val_test, + contamination for the primary) passes on whatever
         weights are loaded now, with this checkpoint's outputs going to output_path/<name>/.
@@ -425,6 +451,22 @@ def run(
                                 f"(never trained on) and the listed val/test ones.")
                 result["contamination_pool_size"] = pool_size
                 run_pass("contamination", pool_size, dataloaders=contamination_loader)
+
+        # --- 4. HOLDOUT PREDICTIONS (unlabelled; own folder, never mixed into the splits above) ---
+        if holdout_groups:
+            logger.info(f"Starting holdout predictions ({name} checkpoint)...")
+            try:
+                result["holdout"] = holdout.run_holdout(
+                    engine.trainer, model, holdout_groups, out_dir / "holdout",
+                    save_arrays=primary, compact=getattr(args, "compact_raw_outputs", False),
+                    with_masks=args.task == "segmentation", batch_size=args.batch_size,
+                    num_workers=getattr(datamodule, "num_workers", 0),
+                    augmentations=getattr(getattr(datamodule, "test_data", None), "augmentations", None),
+                    logger=logger,
+                )
+            except Exception as e:  # noqa: BLE001
+                result["holdout"] = {"error": str(e)}
+                logger.error(f"[holdout] Predictions for the {name} checkpoint failed (non-fatal): {e}")
 
         result["predictions"] = dict(rearrange_cb.predictions_by_split)
         result["thresholds"] = dict(rearrange_cb.thresholds_by_split)
@@ -591,6 +633,11 @@ def run(
                 "total": contamination_pool_size, "normal": contamination_pool_size, "anomalous": 0,
             }
 
+        if holdout_manifest is not None:
+            for name, res in results.items():
+                if "holdout" in res:
+                    holdout_manifest["checkpoints"][name] = {"outputs_dir": f"{name}/holdout", **res["holdout"]}
+
         # ---------------------------------------------------------------------
         # manifest.json - run-level provenance that previously only existed as
         # unstructured lines in the .log file.
@@ -623,6 +670,8 @@ def run(
                 "git_commit": get_git_commit(),
                 "package_versions": {"torch": torch.__version__},
             }
+            if holdout_manifest is not None:
+                manifest["holdout"] = holdout_manifest
             with open(output_path / "manifest.json", "w") as f:
                 json.dump(manifest, f, indent=2, default=str)
         except Exception as e:

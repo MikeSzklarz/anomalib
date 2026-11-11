@@ -121,6 +121,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                              "float16 (~10x smaller, ~0.2%% of the value range in max quantization error). "
                              "Off by default since it's lossy; the default float16 + LZMA storage is already "
                              "~40%% smaller than the old per-image PNG/npz files with zero precision cost.")
+    parser.add_argument("--holdout", action=argparse.BooleanOptionalAction, default=True,
+                        help="If <root_dir>/holdout/<group>/ exists, predict every holdout image after each "
+                             "checkpoint's evaluation and write <checkpoint>/holdout/ (raw scores, classification, "
+                             "raw anomaly maps). On by default; --no-holdout turns it off.")
     parser.add_argument("--check_contamination", action="store_true")
     parser.add_argument("--eval_val_test", action="store_true",
                         help="Run a secondary test pass over the Validation set and merge the CSV outputs.")
