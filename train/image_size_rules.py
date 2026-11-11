@@ -198,11 +198,17 @@ def validate_image_size(model: str, height: int, width: int) -> str | None:
     return None
 
 
-def pre_processor_kwargs(model: str, height: int, width: int) -> dict:
+def pre_processor_kwargs(model: str, height: int, width: int, center_crop: bool = True) -> dict:
     """Arguments for `ModelClass.configure_pre_processor` that make the model's input
     height x width. For most models that is just image_size; models whose pre-processor
-    crops after resizing ("resize_over_crop") also need the crop scaled to match."""
+    crops after resizing ("resize_over_crop") also need the crop scaled to match.
+
+    With center_crop=False the resize goes straight to height x width (full field of
+    view). The crop_size still passed to resize_over_crop models only satisfies their
+    crop <= resize check; the caller strips the CenterCrop afterwards."""
     scale = MODEL_IMAGE_SIZE_RULES.get(model, {}).get("resize_over_crop")
+    if scale and not center_crop:
+        return {"image_size": (height, width), "crop_size": min(height, width)}
     if scale and height == width:
         resize = round(height * scale)
         return {"image_size": (resize, resize), "crop_size": height}

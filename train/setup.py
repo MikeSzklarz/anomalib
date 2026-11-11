@@ -21,9 +21,10 @@ from torchvision.transforms import v2
 
 from anomalib.data.utils.split import TestSplitMode, ValSplitMode
 from anomalib.metrics import AUPR, AUROC, Evaluator, F1Max, F1Score
+from anomalib.pre_processing import PreProcessor
 
 from . import exclusion as exclusion_module
-from .image_size_rules import pre_processor_kwargs
+from .image_size_rules import MODEL_IMAGE_SIZE_RULES, pre_processor_kwargs
 from .registry import DATASET_MAP, MODEL_MAP
 from .utils import get_init_args
 
@@ -355,6 +356,14 @@ def build_contamination_datamodule(args, DataClass: Type, filtered_kwargs: Dict[
     return contamination_loader, contamination_pool_size
 
 
+def _without_center_crop(pre_processor: PreProcessor) -> PreProcessor:
+    """A new PreProcessor with every CenterCrop removed from its transform. A new
+    instance (rather than assigning .transform) so export_transform is rebuilt too."""
+    transform = pre_processor.transform
+    steps = transform.transforms if isinstance(transform, v2.Compose) else [transform]
+    return PreProcessor(transform=v2.Compose([t for t in steps if not isinstance(t, v2.CenterCrop)]))
+
+
 def build_model(args, yaml_config: Dict[str, Any], logger, resolved_image_size: int | None = None) -> Tuple[Any, str]:
     """Returns (model, monitor_metric). resolved_image_size comes from the
     --image_size_ratio resolution in cli.py, if that flag was used."""
@@ -363,16 +372,27 @@ def build_model(args, yaml_config: Dict[str, Any], logger, resolved_image_size: 
     model_kwargs = get_init_args(yaml_config, "model")
 
     _use_color_prep = args.color_preprocessing and args.color_preprocessing != "none"
-    if resolved_image_size or args.image_size or _use_color_prep:
+    # YAML `pre_processor: {center_crop: false}` drops the model's resize-then-center-crop
+    # (dinomaly 448->392, inpformer, mhpatchcore, rad) so defects at the image border are kept.
+    center_crop = yaml_config.get("pre_processor", {}).get("center_crop", True)
+    if resolved_image_size or args.image_size or _use_color_prep or not center_crop:
         try:
             if resolved_image_size:
                 pre_processor = ModelClass.configure_pre_processor(
-                    **pre_processor_kwargs(args.model, resolved_image_size, resolved_image_size))
+                    **pre_processor_kwargs(args.model, resolved_image_size, resolved_image_size, center_crop))
             elif args.image_size:
                 img_size = (args.image_size[0], args.image_size[0]) if len(args.image_size) == 1 else tuple(args.image_size[:2])
-                pre_processor = ModelClass.configure_pre_processor(**pre_processor_kwargs(args.model, *img_size))
+                pre_processor = ModelClass.configure_pre_processor(**pre_processor_kwargs(args.model, *img_size, center_crop))
+            elif not center_crop and MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default"):
+                # No size given: keep the model's baseline input size, just without the crop.
+                default = MODEL_IMAGE_SIZE_RULES[args.model]["default"]
+                pre_processor = ModelClass.configure_pre_processor(**pre_processor_kwargs(args.model, default, default, False))
             else:
                 pre_processor = ModelClass.configure_pre_processor()
+
+            if not center_crop:
+                pre_processor = _without_center_crop(pre_processor)
+                logger.info(f"[pre_processor] center_crop disabled: {pre_processor.transform}")
 
             if _use_color_prep:
                 from .preprocessing import get_color_transform

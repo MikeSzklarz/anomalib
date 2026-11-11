@@ -2,3 +2,8 @@
 trainer:
   min_epochs: 200
   max_epochs: 200
+# Skip InpFormer's resize-448 -> center-crop-392: the crop removes ~6% from every side and
+# drops defects on the BowTie outer edge. The model input stays 392 (full field of view) unless
+# --image_size / --image_size_ratio says otherwise.
+pre_processor:
+  center_crop: false

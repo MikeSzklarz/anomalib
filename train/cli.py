@@ -240,12 +240,6 @@ def main():
     else:
         baseline_size = MODEL_IMAGE_SIZE_RULES.get(args.model, {}).get("default", "unknown")
         logger.info(f"[image_size] Using model baseline default: {baseline_size}")
-        try:
-            resize_target = get_resize_target(MODEL_MAP[args.model].configure_pre_processor())
-            if resize_target:
-                target_h, target_w = resize_target
-        except Exception as e:
-            logger.warning(f"[image_size] Could not determine baseline resize target for native-resolution check: {e}")
 
     config_path = args.config
     if config_path is None:
@@ -263,10 +257,20 @@ def main():
         args, yaml_config, exclude_files, logger, output_path, exclusion=exclusion,
     )
 
+    model, monitor_metric = dataset_model_setup.build_model(args, yaml_config, logger, resolved_image_size)
+
+    if target_h is None:
+        # Baseline run: read the size from the pre-processor the model actually got, which
+        # the YAML (e.g. pre_processor.center_crop) may have changed from the model default.
+        try:
+            resize_target = get_resize_target(model.pre_processor)
+            if resize_target:
+                target_h, target_w = resize_target
+        except Exception as e:
+            logger.warning(f"[image_size] Could not determine baseline resize target for native-resolution check: {e}")
+
     if target_h and target_w:
         log_image_size_analysis(datamodule, logger, args.model, target_h, target_w)
-
-    model, monitor_metric = dataset_model_setup.build_model(args, yaml_config, logger, resolved_image_size)
 
     pipeline.run(
         args=args,
